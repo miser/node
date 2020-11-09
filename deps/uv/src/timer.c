@@ -106,7 +106,7 @@ int uv_timer_stop(uv_timer_t* handle) {
   heap_remove(timer_heap(handle->loop),
               (struct heap_node*) &handle->heap_node,
               timer_less_than);
-  uv__handle_stop(handle);
+  uv__handle_stop(handle); // 用作？
 
   return 0;
 }
@@ -140,10 +140,12 @@ int uv__next_timeout(const uv_loop_t* loop) {
   const uv_timer_t* handle;
   uint64_t diff;
 
+  // 最小堆的 root节点，找出最小的超时时间
   heap_node = heap_min(timer_heap(loop));
   if (heap_node == NULL)
     return -1; /* block indefinitely */
 
+  // 通过结构体成员找到结构体首地址
   handle = container_of(heap_node, uv_timer_t, heap_node);
   if (handle->timeout <= loop->time)
     return 0;
@@ -171,6 +173,7 @@ void uv__run_timers(uv_loop_t* loop) {
 
     uv_timer_stop(handle);
     uv_timer_again(handle);
+    
     handle->timer_cb(handle);
   }
 }

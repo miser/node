@@ -357,14 +357,16 @@ int uv_run(uv_loop_t* loop, uv_run_mode mode) {
   int r;
   int ran_pending;
 
+  // 是否还存在handle、req或closing_handles
   r = uv__loop_alive(loop);
   if (!r)
-    uv__update_time(loop);
+    uv__update_time(loop); // 作用？
 
+  // loop->stop_flag 作用？
   while (r != 0 && loop->stop_flag == 0) {
     uv__update_time(loop);
-    uv__run_timers(loop);
-    ran_pending = uv__run_pending(loop);
+    uv__run_timers(loop); // timers
+    ran_pending = uv__run_pending(loop); // 返回0表示空，1表示有；把所有都执行完
     uv__run_idle(loop);
     uv__run_prepare(loop);
 
@@ -372,6 +374,9 @@ int uv_run(uv_loop_t* loop, uv_run_mode mode) {
     if ((mode == UV_RUN_ONCE && !ran_pending) || mode == UV_RUN_DEFAULT)
       timeout = uv_backend_timeout(loop);
 
+    // 根据timers里最近的超时时间算出一个差值 diff = loop.time - min.timeout
+    // 如果 diff >= 0 , timeout = 0
+    // 否则 timeout = min(diff, INT_MAX)
     uv__io_poll(loop, timeout);
     uv__run_check(loop);
     uv__run_closing_handles(loop);
@@ -796,6 +801,7 @@ int uv_fileno(const uv_handle_t* handle, uv_os_fd_t* fd) {
 }
 
 
+// https://zhuanlan.zhihu.com/p/82738202
 static int uv__run_pending(uv_loop_t* loop) {
   QUEUE* q;
   QUEUE pq;
@@ -811,7 +817,7 @@ static int uv__run_pending(uv_loop_t* loop) {
     QUEUE_REMOVE(q);
     QUEUE_INIT(q);
     w = QUEUE_DATA(q, uv__io_t, pending_queue);
-    w->cb(loop, w, POLLOUT);
+    w->cb(loop, w, POLLOUT); // w具体是什么
   }
 
   return 1;
