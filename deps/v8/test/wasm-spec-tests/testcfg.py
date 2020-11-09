@@ -9,18 +9,25 @@ from testrunner.objects import testcase
 
 proposal_flags = [{
                     'name': 'reference-types',
-                    'flags': ['--experimental-wasm-anyref',
-                              '--no-experimental-wasm-bulk-memory']
+                    'flags': ['--experimental-wasm-reftypes',
+                              '--wasm-staging']
                   },
                   {
                     'name': 'bulk-memory-operations',
-                    'flags': ['--experimental-wasm-bulk-memory']
+                    'flags': ['--experimental-wasm-bulk-memory',
+                              '--wasm-staging']
                   },
                   {
                     'name': 'js-types',
                     'flags': ['--experimental-wasm-type-reflection',
-                              '--no-experimental-wasm-bulk-memory']
-                  }]
+                              '--wasm-staging']
+                  },
+                  {
+                    'name': 'tail-call',
+                    'flags': ['--experimental-wasm-return-call',
+                              '--wasm-staging']
+                  },
+                  ]
 
 class TestLoader(testsuite.JSTestLoader):
   pass

@@ -6,8 +6,12 @@
 #define V8_COMPILER_JS_OPERATOR_H_
 
 #include "src/base/compiler-specific.h"
-#include "src/common/globals.h"
+#include "src/codegen/tnode.h"
 #include "src/compiler/feedback-source.h"
+#include "src/compiler/globals.h"
+#include "src/compiler/node-properties.h"
+#include "src/compiler/node.h"
+#include "src/compiler/opcodes.h"
 #include "src/handles/maybe-handles.h"
 #include "src/objects/type-hints.h"
 #include "src/runtime/runtime.h"
@@ -24,8 +28,50 @@ class SharedFunctionInfo;
 namespace compiler {
 
 // Forward declarations.
+class JSGraph;
 class Operator;
 struct JSOperatorGlobalCache;
+
+// Macro lists.
+#define JS_UNOP_WITH_FEEDBACK(V) \
+  JS_BITWISE_UNOP_LIST(V)        \
+  JS_ARITH_UNOP_LIST(V)
+
+#define JS_BINOP_WITH_FEEDBACK(V) \
+  JS_ARITH_BINOP_LIST(V)          \
+  JS_BITWISE_BINOP_LIST(V)        \
+  JS_COMPARE_BINOP_LIST(V)        \
+  V(JSInstanceOf, InstanceOf)
+
+// Predicates.
+class JSOperator final : public AllStatic {
+ public:
+  static constexpr bool IsUnaryWithFeedback(Operator::Opcode opcode) {
+#define CASE(Name, ...)   \
+  case IrOpcode::k##Name: \
+    return true;
+    switch (opcode) {
+      JS_UNOP_WITH_FEEDBACK(CASE);
+      default:
+        return false;
+    }
+#undef CASE
+    return false;
+  }
+
+  static constexpr bool IsBinaryWithFeedback(Operator::Opcode opcode) {
+#define CASE(Name, ...)   \
+  case IrOpcode::k##Name: \
+    return true;
+    switch (opcode) {
+      JS_BINOP_WITH_FEEDBACK(CASE);
+      default:
+        return false;
+    }
+#undef CASE
+    return false;
+  }
+};
 
 // Defines the frequency a given Call/Construct site was executed. For some
 // call sites the frequency is not known.
@@ -60,8 +106,6 @@ class CallFrequency final {
 
 std::ostream& operator<<(std::ostream&, CallFrequency const&);
 
-CallFrequency CallFrequencyOf(Operator const* op) V8_WARN_UNUSED_RESULT;
-
 // Defines the flags for a JavaScript call forwarding parameters. This
 // is used as parameter by JSConstructForwardVarargs operators.
 class ConstructForwardVarargsParameters final {
@@ -85,8 +129,8 @@ class ConstructForwardVarargsParameters final {
     return p.bit_field_;
   }
 
-  using ArityField = BitField<size_t, 0, 16>;
-  using StartIndexField = BitField<uint32_t, 16, 16>;
+  using ArityField = base::BitField<size_t, 0, 16>;
+  using StartIndexField = base::BitField<uint32_t, 16, 16>;
 
   uint32_t const bit_field_;
 };
@@ -97,15 +141,33 @@ std::ostream& operator<<(std::ostream&,
 ConstructForwardVarargsParameters const& ConstructForwardVarargsParametersOf(
     Operator const*) V8_WARN_UNUSED_RESULT;
 
-// Defines the arity and the feedback for a JavaScript constructor call. This is
-// used as a parameter by JSConstruct and JSConstructWithSpread operators.
+// Defines the arity (parameters plus the target and new target) and the
+// feedback for a JavaScript constructor call. This is used as a parameter by
+// JSConstruct, JSConstructWithArrayLike, and JSConstructWithSpread operators.
 class ConstructParameters final {
  public:
+  // A separate declaration to get around circular declaration dependencies.
+  // Checked to equal JSConstructNode::kExtraInputCount below.
+  static constexpr int kExtraConstructInputCount = 3;
+
   ConstructParameters(uint32_t arity, CallFrequency const& frequency,
                       FeedbackSource const& feedback)
-      : arity_(arity), frequency_(frequency), feedback_(feedback) {}
+      : arity_(arity), frequency_(frequency), feedback_(feedback) {
+    DCHECK_GE(arity, kExtraConstructInputCount);
+    DCHECK(is_int32(arity));
+  }
 
+  // TODO(jgruber): Consider removing `arity()` and just storing the arity
+  // without extra args in ConstructParameters. Every spot that creates
+  // ConstructParameters artifically adds the extra args. Every spot that uses
+  // ConstructParameters artificially subtracts the extra args.
+  // We keep them for now for consistency with other spots
+  // that expect `arity()` to include extra args.
   uint32_t arity() const { return arity_; }
+  int arity_without_implicit_args() const {
+    return static_cast<int>(arity_ - kExtraConstructInputCount);
+  }
+
   CallFrequency const& frequency() const { return frequency_; }
   FeedbackSource const& feedback() const { return feedback_; }
 
@@ -147,8 +209,8 @@ class CallForwardVarargsParameters final {
     return p.bit_field_;
   }
 
-  using ArityField = BitField<size_t, 0, 15>;
-  using StartIndexField = BitField<uint32_t, 15, 15>;
+  using ArityField = base::BitField<size_t, 0, 15>;
+  using StartIndexField = base::BitField<uint32_t, 15, 15>;
 
   uint32_t const bit_field_;
 };
@@ -158,21 +220,42 @@ std::ostream& operator<<(std::ostream&, CallForwardVarargsParameters const&);
 CallForwardVarargsParameters const& CallForwardVarargsParametersOf(
     Operator const*) V8_WARN_UNUSED_RESULT;
 
-// Defines the arity and the call flags for a JavaScript function call. This is
-// used as a parameter by JSCall and JSCallWithSpread operators.
+// Defines the arity (parameters plus the target and receiver) and the call
+// flags for a JavaScript function call. This is used as a parameter by JSCall,
+// JSCallWithArrayLike and JSCallWithSpread operators.
 class CallParameters final {
  public:
+  // A separate declaration to get around circular declaration dependencies.
+  // Checked to equal JSCallNode::kExtraInputCount below.
+  static constexpr int kExtraCallInputCount = 3;
+
   CallParameters(size_t arity, CallFrequency const& frequency,
                  FeedbackSource const& feedback,
                  ConvertReceiverMode convert_mode,
-                 SpeculationMode speculation_mode)
+                 SpeculationMode speculation_mode,
+                 CallFeedbackRelation feedback_relation)
       : bit_field_(ArityField::encode(arity) |
+                   CallFeedbackRelationField::encode(feedback_relation) |
                    SpeculationModeField::encode(speculation_mode) |
                    ConvertReceiverModeField::encode(convert_mode)),
         frequency_(frequency),
-        feedback_(feedback) {}
+        feedback_(feedback) {
+    // CallFeedbackRelation is ignored if the feedback slot is invalid.
+    DCHECK_IMPLIES(speculation_mode == SpeculationMode::kAllowSpeculation,
+                   feedback.IsValid());
+    DCHECK_IMPLIES(!feedback.IsValid(),
+                   feedback_relation == CallFeedbackRelation::kUnrelated);
+    DCHECK_GE(arity, kExtraCallInputCount);
+    DCHECK(is_int32(arity));
+  }
 
+  // TODO(jgruber): Consider removing `arity()` and just storing the arity
+  // without extra args in CallParameters.
   size_t arity() const { return ArityField::decode(bit_field_); }
+  int arity_without_implicit_args() const {
+    return static_cast<int>(arity() - kExtraCallInputCount);
+  }
+
   CallFrequency const& frequency() const { return frequency_; }
   ConvertReceiverMode convert_mode() const {
     return ConvertReceiverModeField::decode(bit_field_);
@@ -181,6 +264,10 @@ class CallParameters final {
 
   SpeculationMode speculation_mode() const {
     return SpeculationModeField::decode(bit_field_);
+  }
+
+  CallFeedbackRelation feedback_relation() const {
+    return CallFeedbackRelationField::decode(bit_field_);
   }
 
   bool operator==(CallParameters const& that) const {
@@ -197,9 +284,10 @@ class CallParameters final {
                               feedback_hash(p.feedback_));
   }
 
-  using ArityField = BitField<size_t, 0, 28>;
-  using SpeculationModeField = BitField<SpeculationMode, 28, 1>;
-  using ConvertReceiverModeField = BitField<ConvertReceiverMode, 29, 2>;
+  using ArityField = base::BitField<size_t, 0, 27>;
+  using CallFeedbackRelationField = base::BitField<CallFeedbackRelation, 27, 1>;
+  using SpeculationModeField = base::BitField<SpeculationMode, 28, 1>;
+  using ConvertReceiverModeField = base::BitField<ConvertReceiverMode, 29, 2>;
 
   uint32_t const bit_field_;
   CallFrequency const frequency_;
@@ -409,13 +497,13 @@ class StoreGlobalParameters final {
       : language_mode_(language_mode), name_(name), feedback_(feedback) {}
 
   LanguageMode language_mode() const { return language_mode_; }
-  const FeedbackSource& feedback() const { return feedback_; }
-  const Handle<Name>& name() const { return name_; }
+  FeedbackSource const& feedback() const { return feedback_; }
+  Handle<Name> const& name() const { return name_; }
 
  private:
-  const LanguageMode language_mode_;
-  const Handle<Name> name_;
-  const FeedbackSource feedback_;
+  LanguageMode const language_mode_;
+  Handle<Name> const name_;
+  FeedbackSource const feedback_;
 };
 
 bool operator==(StoreGlobalParameters const&, StoreGlobalParameters const&);
@@ -570,21 +658,15 @@ const CreateBoundFunctionParameters& CreateBoundFunctionParametersOf(
 class CreateClosureParameters final {
  public:
   CreateClosureParameters(Handle<SharedFunctionInfo> shared_info,
-                          Handle<FeedbackCell> feedback_cell, Handle<Code> code,
-                          AllocationType allocation)
-      : shared_info_(shared_info),
-        feedback_cell_(feedback_cell),
-        code_(code),
-        allocation_(allocation) {}
+                          Handle<Code> code, AllocationType allocation)
+      : shared_info_(shared_info), code_(code), allocation_(allocation) {}
 
   Handle<SharedFunctionInfo> shared_info() const { return shared_info_; }
-  Handle<FeedbackCell> feedback_cell() const { return feedback_cell_; }
   Handle<Code> code() const { return code_; }
   AllocationType allocation() const { return allocation_; }
 
  private:
   Handle<SharedFunctionInfo> const shared_info_;
-  Handle<FeedbackCell> const feedback_cell_;
   Handle<Code> const code_;
   AllocationType const allocation_;
 };
@@ -597,6 +679,35 @@ size_t hash_value(CreateClosureParameters const&);
 std::ostream& operator<<(std::ostream&, CreateClosureParameters const&);
 
 const CreateClosureParameters& CreateClosureParametersOf(const Operator* op);
+
+class GetTemplateObjectParameters final {
+ public:
+  GetTemplateObjectParameters(Handle<TemplateObjectDescription> description,
+                              Handle<SharedFunctionInfo> shared,
+                              FeedbackSource const& feedback)
+      : description_(description), shared_(shared), feedback_(feedback) {}
+
+  Handle<TemplateObjectDescription> description() const { return description_; }
+  Handle<SharedFunctionInfo> shared() const { return shared_; }
+  FeedbackSource const& feedback() const { return feedback_; }
+
+ private:
+  Handle<TemplateObjectDescription> const description_;
+  Handle<SharedFunctionInfo> const shared_;
+  FeedbackSource const feedback_;
+};
+
+bool operator==(GetTemplateObjectParameters const&,
+                GetTemplateObjectParameters const&);
+bool operator!=(GetTemplateObjectParameters const&,
+                GetTemplateObjectParameters const&);
+
+size_t hash_value(GetTemplateObjectParameters const&);
+
+std::ostream& operator<<(std::ostream&, GetTemplateObjectParameters const&);
+
+const GetTemplateObjectParameters& GetTemplateObjectParametersOf(
+    const Operator* op);
 
 // Defines shared information for the literal that should be created. This is
 // used as parameter by JSCreateLiteralArray, JSCreateLiteralObject and
@@ -653,6 +764,31 @@ std::ostream& operator<<(std::ostream&, CloneObjectParameters const&);
 
 const CloneObjectParameters& CloneObjectParametersOf(const Operator* op);
 
+// Defines the shared information for the iterator symbol thats loaded and
+// called. This is used as a parameter by JSGetIterator operator.
+class GetIteratorParameters final {
+ public:
+  GetIteratorParameters(const FeedbackSource& load_feedback,
+                        const FeedbackSource& call_feedback)
+      : load_feedback_(load_feedback), call_feedback_(call_feedback) {}
+
+  FeedbackSource const& loadFeedback() const { return load_feedback_; }
+  FeedbackSource const& callFeedback() const { return call_feedback_; }
+
+ private:
+  FeedbackSource const load_feedback_;
+  FeedbackSource const call_feedback_;
+};
+
+bool operator==(GetIteratorParameters const&, GetIteratorParameters const&);
+bool operator!=(GetIteratorParameters const&, GetIteratorParameters const&);
+
+size_t hash_value(GetIteratorParameters const&);
+
+std::ostream& operator<<(std::ostream&, GetIteratorParameters const&);
+
+const GetIteratorParameters& GetIteratorParametersOf(const Operator* op);
+
 // Descriptor used by the JSForInPrepare and JSForInNext opcodes.
 enum class ForInMode : uint8_t {
   kUseEnumCacheKeysAndIndices,
@@ -665,10 +801,6 @@ size_t hash_value(ForInMode);
 std::ostream& operator<<(std::ostream&, ForInMode);
 
 ForInMode ForInModeOf(Operator const* op) V8_WARN_UNUSED_RESULT;
-
-BinaryOperationHint BinaryOperationHintOf(const Operator* op);
-
-CompareOperationHint CompareOperationHintOf(const Operator* op);
 
 int RegisterCountOf(Operator const* op) V8_WARN_UNUSED_RESULT;
 
@@ -685,30 +817,30 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
  public:
   explicit JSOperatorBuilder(Zone* zone);
 
-  const Operator* Equal(CompareOperationHint hint);
-  const Operator* StrictEqual(CompareOperationHint hint);
-  const Operator* LessThan(CompareOperationHint hint);
-  const Operator* GreaterThan(CompareOperationHint hint);
-  const Operator* LessThanOrEqual(CompareOperationHint hint);
-  const Operator* GreaterThanOrEqual(CompareOperationHint hint);
+  const Operator* Equal(FeedbackSource const& feedback);
+  const Operator* StrictEqual(FeedbackSource const& feedback);
+  const Operator* LessThan(FeedbackSource const& feedback);
+  const Operator* GreaterThan(FeedbackSource const& feedback);
+  const Operator* LessThanOrEqual(FeedbackSource const& feedback);
+  const Operator* GreaterThanOrEqual(FeedbackSource const& feedback);
 
-  const Operator* BitwiseOr();
-  const Operator* BitwiseXor();
-  const Operator* BitwiseAnd();
-  const Operator* ShiftLeft();
-  const Operator* ShiftRight();
-  const Operator* ShiftRightLogical();
-  const Operator* Add(BinaryOperationHint hint);
-  const Operator* Subtract();
-  const Operator* Multiply();
-  const Operator* Divide();
-  const Operator* Modulus();
-  const Operator* Exponentiate();
+  const Operator* BitwiseOr(FeedbackSource const& feedback);
+  const Operator* BitwiseXor(FeedbackSource const& feedback);
+  const Operator* BitwiseAnd(FeedbackSource const& feedback);
+  const Operator* ShiftLeft(FeedbackSource const& feedback);
+  const Operator* ShiftRight(FeedbackSource const& feedback);
+  const Operator* ShiftRightLogical(FeedbackSource const& feedback);
+  const Operator* Add(FeedbackSource const& feedback);
+  const Operator* Subtract(FeedbackSource const& feedback);
+  const Operator* Multiply(FeedbackSource const& feedback);
+  const Operator* Divide(FeedbackSource const& feedback);
+  const Operator* Modulus(FeedbackSource const& feedback);
+  const Operator* Exponentiate(FeedbackSource const& feedback);
 
-  const Operator* BitwiseNot();
-  const Operator* Decrement();
-  const Operator* Increment();
-  const Operator* Negate();
+  const Operator* BitwiseNot(FeedbackSource const& feedback);
+  const Operator* Decrement(FeedbackSource const& feedback);
+  const Operator* Increment(FeedbackSource const& feedback);
+  const Operator* Negate(FeedbackSource const& feedback);
 
   const Operator* ToLength();
   const Operator* ToName();
@@ -726,8 +858,7 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
   const Operator* CreateCollectionIterator(CollectionKind, IterationKind);
   const Operator* CreateBoundFunction(size_t arity, Handle<Map> map);
   const Operator* CreateClosure(
-      Handle<SharedFunctionInfo> shared_info,
-      Handle<FeedbackCell> feedback_cell, Handle<Code> code,
+      Handle<SharedFunctionInfo> shared_info, Handle<Code> code,
       AllocationType allocation = AllocationType::kYoung);
   const Operator* CreateIterResultObject();
   const Operator* CreateStringIterator();
@@ -742,7 +873,6 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
   const Operator* CreateEmptyLiteralArray(FeedbackSource const& feedback);
   const Operator* CreateArrayFromIterable();
   const Operator* CreateEmptyLiteralObject();
-
   const Operator* CreateLiteralObject(
       Handle<ObjectBoilerplateDescription> constant,
       FeedbackSource const& feedback, int literal_flags,
@@ -753,17 +883,28 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
                                       FeedbackSource const& feedback,
                                       int literal_flags);
 
+  const Operator* GetTemplateObject(
+      Handle<TemplateObjectDescription> description,
+      Handle<SharedFunctionInfo> shared, FeedbackSource const& feedback);
+
   const Operator* CallForwardVarargs(size_t arity, uint32_t start_index);
   const Operator* Call(
       size_t arity, CallFrequency const& frequency = CallFrequency(),
       FeedbackSource const& feedback = FeedbackSource(),
       ConvertReceiverMode convert_mode = ConvertReceiverMode::kAny,
-      SpeculationMode speculation_mode = SpeculationMode::kDisallowSpeculation);
-  const Operator* CallWithArrayLike(CallFrequency const& frequency);
+      SpeculationMode speculation_mode = SpeculationMode::kDisallowSpeculation,
+      CallFeedbackRelation feedback_relation =
+          CallFeedbackRelation::kUnrelated);
+  const Operator* CallWithArrayLike(
+      CallFrequency const& frequency,
+      const FeedbackSource& feedback = FeedbackSource{},
+      SpeculationMode speculation_mode = SpeculationMode::kDisallowSpeculation,
+      CallFeedbackRelation feedback_relation = CallFeedbackRelation::kRelated);
   const Operator* CallWithSpread(
       uint32_t arity, CallFrequency const& frequency = CallFrequency(),
       FeedbackSource const& feedback = FeedbackSource(),
-      SpeculationMode speculation_mode = SpeculationMode::kDisallowSpeculation);
+      SpeculationMode speculation_mode = SpeculationMode::kDisallowSpeculation,
+      CallFeedbackRelation feedback_relation = CallFeedbackRelation::kRelated);
   const Operator* CallRuntime(Runtime::FunctionId id);
   const Operator* CallRuntime(Runtime::FunctionId id, size_t arity);
   const Operator* CallRuntime(const Runtime::Function* function, size_t arity);
@@ -772,7 +913,8 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
   const Operator* Construct(uint32_t arity,
                             CallFrequency const& frequency = CallFrequency(),
                             FeedbackSource const& feedback = FeedbackSource());
-  const Operator* ConstructWithArrayLike(CallFrequency const& frequency);
+  const Operator* ConstructWithArrayLike(CallFrequency const& frequency,
+                                         FeedbackSource const& feedback);
   const Operator* ConstructWithSpread(
       uint32_t arity, CallFrequency const& frequency = CallFrequency(),
       FeedbackSource const& feedback = FeedbackSource());
@@ -805,11 +947,14 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
                               const Handle<Name>& name,
                               const FeedbackSource& feedback);
 
+  const Operator* HasContextExtension(size_t depth);
   const Operator* LoadContext(size_t depth, size_t index, bool immutable);
   const Operator* StoreContext(size_t depth, size_t index);
 
   const Operator* LoadModule(int32_t cell_index);
   const Operator* StoreModule(int32_t cell_index);
+
+  const Operator* GetImportMeta();
 
   const Operator* HasInPrototypeChain();
   const Operator* InstanceOf(const FeedbackSource& feedback);
@@ -837,7 +982,7 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
   const Operator* GeneratorRestoreRegister(int index);
   const Operator* GeneratorRestoreInputOrDebugPos();
 
-  const Operator* StackCheck();
+  const Operator* StackCheck(StackCheckKind kind);
   const Operator* Debugger();
 
   const Operator* FulfillPromise();
@@ -856,7 +1001,8 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
   const Operator* ParseInt();
   const Operator* RegExpTest();
 
-  const Operator* GetIterator(FeedbackSource const& feedback);
+  const Operator* GetIterator(FeedbackSource const& load_feedback,
+                              FeedbackSource const& call_feedback);
 
  private:
   Zone* zone() const { return zone_; }
@@ -866,6 +1012,524 @@ class V8_EXPORT_PRIVATE JSOperatorBuilder final
 
   DISALLOW_COPY_AND_ASSIGN(JSOperatorBuilder);
 };
+
+// Node wrappers.
+
+class JSNodeWrapperBase : public NodeWrapper {
+ public:
+  explicit constexpr JSNodeWrapperBase(Node* node) : NodeWrapper(node) {}
+
+  // Valid iff this node has a context input.
+  TNode<Object> context() const {
+    // Could be a Context or NoContextConstant.
+    return TNode<Object>::UncheckedCast(
+        NodeProperties::GetContextInput(node()));
+  }
+
+  // Valid iff this node has exactly one effect input.
+  Effect effect() const {
+    DCHECK_EQ(node()->op()->EffectInputCount(), 1);
+    return Effect{NodeProperties::GetEffectInput(node())};
+  }
+
+  // Valid iff this node has exactly one control input.
+  Control control() const {
+    DCHECK_EQ(node()->op()->ControlInputCount(), 1);
+    return Control{NodeProperties::GetControlInput(node())};
+  }
+
+  // Valid iff this node has a frame state input.
+  FrameState frame_state() const {
+    return FrameState{NodeProperties::GetFrameStateInput(node())};
+  }
+};
+
+#define DEFINE_INPUT_ACCESSORS(Name, name, TheIndex, Type) \
+  static constexpr int Name##Index() { return TheIndex; }  \
+  TNode<Type> name() const {                               \
+    return TNode<Type>::UncheckedCast(                     \
+        NodeProperties::GetValueInput(node(), TheIndex));  \
+  }
+
+class JSUnaryOpNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSUnaryOpNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(JSOperator::IsUnaryWithFeedback(node->opcode()));
+  }
+
+#define INPUTS(V)            \
+  V(Value, value, 0, Object) \
+  V(FeedbackVector, feedback_vector, 1, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+#define V(JSName, ...) using JSName##Node = JSUnaryOpNode;
+JS_UNOP_WITH_FEEDBACK(V)
+#undef V
+
+class JSBinaryOpNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSBinaryOpNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(JSOperator::IsBinaryWithFeedback(node->opcode()));
+  }
+
+  const FeedbackParameter& Parameters() const {
+    return FeedbackParameterOf(node()->op());
+  }
+
+#define INPUTS(V)            \
+  V(Left, left, 0, Object)   \
+  V(Right, right, 1, Object) \
+  V(FeedbackVector, feedback_vector, 2, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+#define V(JSName, ...) using JSName##Node = JSBinaryOpNode;
+JS_BINOP_WITH_FEEDBACK(V)
+#undef V
+
+class JSGetIteratorNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSGetIteratorNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSGetIterator);
+  }
+
+  const GetIteratorParameters& Parameters() const {
+    return GetIteratorParametersOf(node()->op());
+  }
+
+#define INPUTS(V)                  \
+  V(Receiver, receiver, 0, Object) \
+  V(FeedbackVector, feedback_vector, 1, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSCloneObjectNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSCloneObjectNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSCloneObject);
+  }
+
+  const CloneObjectParameters& Parameters() const {
+    return CloneObjectParametersOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Source, source, 0, Object) \
+  V(FeedbackVector, feedback_vector, 1, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSGetTemplateObjectNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSGetTemplateObjectNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSGetTemplateObject);
+  }
+
+  const GetTemplateObjectParameters& Parameters() const {
+    return GetTemplateObjectParametersOf(node()->op());
+  }
+
+#define INPUTS(V) V(FeedbackVector, feedback_vector, 0, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSCreateLiteralOpNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSCreateLiteralOpNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSCreateLiteralArray ||
+                     node->opcode() == IrOpcode::kJSCreateLiteralObject ||
+                     node->opcode() == IrOpcode::kJSCreateLiteralRegExp);
+  }
+
+  const CreateLiteralParameters& Parameters() const {
+    return CreateLiteralParametersOf(node()->op());
+  }
+
+#define INPUTS(V) V(FeedbackVector, feedback_vector, 0, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+using JSCreateLiteralArrayNode = JSCreateLiteralOpNode;
+using JSCreateLiteralObjectNode = JSCreateLiteralOpNode;
+using JSCreateLiteralRegExpNode = JSCreateLiteralOpNode;
+
+class JSHasPropertyNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSHasPropertyNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSHasProperty);
+  }
+
+  const PropertyAccess& Parameters() const {
+    return PropertyAccessOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Key, key, 1, Object)       \
+  V(FeedbackVector, feedback_vector, 2, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSLoadPropertyNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSLoadPropertyNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSLoadProperty);
+  }
+
+  const PropertyAccess& Parameters() const {
+    return PropertyAccessOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Key, key, 1, Object)       \
+  V(FeedbackVector, feedback_vector, 2, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStorePropertyNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStorePropertyNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreProperty);
+  }
+
+  const PropertyAccess& Parameters() const {
+    return PropertyAccessOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Key, key, 1, Object)       \
+  V(Value, value, 2, Object)   \
+  V(FeedbackVector, feedback_vector, 3, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+namespace js_node_wrapper_utils {
+// Avoids template definitions in the .cc file.
+TNode<Oddball> UndefinedConstant(JSGraph* jsgraph);
+}  // namespace js_node_wrapper_utils
+
+class JSCallOrConstructNode : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSCallOrConstructNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSCall ||
+                     node->opcode() == IrOpcode::kJSCallWithArrayLike ||
+                     node->opcode() == IrOpcode::kJSCallWithSpread ||
+                     node->opcode() == IrOpcode::kJSConstruct ||
+                     node->opcode() == IrOpcode::kJSConstructWithArrayLike ||
+                     node->opcode() == IrOpcode::kJSConstructWithSpread);
+  }
+
+#define INPUTS(V)              \
+  V(Target, target, 0, Object) \
+  V(ReceiverOrNewTarget, receiver_or_new_target, 1, Object)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+
+  // Besides actual arguments, JSCall nodes (and variants) also take the
+  // following. Note that we rely on the fact that all variants (JSCall,
+  // JSCallWithArrayLike, JSCallWithSpread, JSConstruct,
+  // JSConstructWithArrayLike, JSConstructWithSpread) have the same underlying
+  // node layout.
+  static constexpr int kTargetInputCount = 1;
+  static constexpr int kReceiverOrNewTargetInputCount = 1;
+  static constexpr int kFeedbackVectorInputCount = 1;
+  static constexpr int kExtraInputCount = kTargetInputCount +
+                                          kReceiverOrNewTargetInputCount +
+                                          kFeedbackVectorInputCount;
+  STATIC_ASSERT(kExtraInputCount == CallParameters::kExtraCallInputCount);
+  STATIC_ASSERT(kExtraInputCount ==
+                ConstructParameters::kExtraConstructInputCount);
+
+  // Just for static asserts for spots that rely on node layout.
+  static constexpr bool kFeedbackVectorIsLastInput = true;
+
+  // Some spots rely on the fact that call and construct variants have the same
+  // layout.
+  static constexpr bool kHaveIdenticalLayouts = true;
+
+  // This is the arity fed into Call/ConstructArguments.
+  static constexpr int ArityForArgc(int parameters) {
+    return parameters + kExtraInputCount;
+  }
+
+  static constexpr int FirstArgumentIndex() {
+    return ReceiverOrNewTargetIndex() + 1;
+  }
+  static constexpr int ArgumentIndex(int i) { return FirstArgumentIndex() + i; }
+
+  TNode<Object> Argument(int i) const {
+    DCHECK_LT(i, ArgumentCount());
+    return TNode<Object>::UncheckedCast(
+        NodeProperties::GetValueInput(node(), ArgumentIndex(i)));
+  }
+  int LastArgumentIndex() const {
+    DCHECK_GT(ArgumentCount(), 0);
+    return ArgumentIndex(ArgumentCount() - 1);
+  }
+  TNode<Object> LastArgument() const {
+    DCHECK_GT(ArgumentCount(), 0);
+    return Argument(ArgumentCount() - 1);
+  }
+  TNode<Object> ArgumentOr(int i, Node* default_value) const {
+    return i < ArgumentCount() ? Argument(i)
+                               : TNode<Object>::UncheckedCast(default_value);
+  }
+  TNode<Object> ArgumentOrUndefined(int i, JSGraph* jsgraph) const {
+    return ArgumentOr(i, js_node_wrapper_utils::UndefinedConstant(jsgraph));
+  }
+  virtual int ArgumentCount() const = 0;
+
+  static constexpr int FeedbackVectorIndexForArgc(int argc) {
+    STATIC_ASSERT(kFeedbackVectorIsLastInput);
+    return ArgumentIndex(argc - 1) + 1;
+  }
+  int FeedbackVectorIndex() const {
+    return FeedbackVectorIndexForArgc(ArgumentCount());
+  }
+  TNode<HeapObject> feedback_vector() const {
+    return TNode<HeapObject>::UncheckedCast(
+        NodeProperties::GetValueInput(node(), FeedbackVectorIndex()));
+  }
+};
+
+template <int kOpcode>
+class JSCallNodeBase final : public JSCallOrConstructNode {
+ public:
+  explicit constexpr JSCallNodeBase(Node* node) : JSCallOrConstructNode(node) {
+    CONSTEXPR_DCHECK(node->opcode() == kOpcode);
+  }
+
+  const CallParameters& Parameters() const {
+    return CallParametersOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Target, target, 0, Object) \
+  V(Receiver, receiver, 1, Object)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+
+  static constexpr int kReceiverInputCount = 1;
+  STATIC_ASSERT(kReceiverInputCount ==
+                JSCallOrConstructNode::kReceiverOrNewTargetInputCount);
+
+  int ArgumentCount() const override {
+    // Note: The count reported by this function depends only on the parameter,
+    // thus adding/removing inputs will not affect it.
+    return Parameters().arity_without_implicit_args();
+  }
+};
+
+using JSCallNode = JSCallNodeBase<IrOpcode::kJSCall>;
+using JSCallWithSpreadNode = JSCallNodeBase<IrOpcode::kJSCallWithSpread>;
+using JSCallWithArrayLikeNode = JSCallNodeBase<IrOpcode::kJSCallWithArrayLike>;
+
+template <int kOpcode>
+class JSConstructNodeBase final : public JSCallOrConstructNode {
+ public:
+  explicit constexpr JSConstructNodeBase(Node* node)
+      : JSCallOrConstructNode(node) {
+    CONSTEXPR_DCHECK(node->opcode() == kOpcode);
+  }
+
+  const ConstructParameters& Parameters() const {
+    return ConstructParametersOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Target, target, 0, Object) \
+  V(NewTarget, new_target, 1, Object)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+
+  static constexpr int kNewTargetInputCount = 1;
+  STATIC_ASSERT(kNewTargetInputCount ==
+                JSCallOrConstructNode::kReceiverOrNewTargetInputCount);
+
+  int ArgumentCount() const {
+    // Note: The count reported by this function depends only on the parameter,
+    // thus adding/removing inputs will not affect it.
+    return Parameters().arity_without_implicit_args();
+  }
+};
+
+using JSConstructNode = JSConstructNodeBase<IrOpcode::kJSConstruct>;
+using JSConstructWithSpreadNode =
+    JSConstructNodeBase<IrOpcode::kJSConstructWithSpread>;
+using JSConstructWithArrayLikeNode =
+    JSConstructNodeBase<IrOpcode::kJSConstructWithArrayLike>;
+
+class JSLoadNamedNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSLoadNamedNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSLoadNamed);
+  }
+
+  const NamedAccess& Parameters() const { return NamedAccessOf(node()->op()); }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(FeedbackVector, feedback_vector, 1, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStoreNamedNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStoreNamedNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreNamed);
+  }
+
+  const NamedAccess& Parameters() const { return NamedAccessOf(node()->op()); }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Value, value, 1, Object)   \
+  V(FeedbackVector, feedback_vector, 2, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStoreNamedOwnNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStoreNamedOwnNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreNamedOwn);
+  }
+
+  const StoreNamedOwnParameters& Parameters() const {
+    return StoreNamedOwnParametersOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Value, value, 1, Object)   \
+  V(FeedbackVector, feedback_vector, 2, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStoreGlobalNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStoreGlobalNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreGlobal);
+  }
+
+  const StoreGlobalParameters& Parameters() const {
+    return StoreGlobalParametersOf(node()->op());
+  }
+
+#define INPUTS(V)            \
+  V(Value, value, 0, Object) \
+  V(FeedbackVector, feedback_vector, 1, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSLoadGlobalNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSLoadGlobalNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSLoadGlobal);
+  }
+
+  const LoadGlobalParameters& Parameters() const {
+    return LoadGlobalParametersOf(node()->op());
+  }
+
+#define INPUTS(V) V(FeedbackVector, feedback_vector, 0, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSCreateEmptyLiteralArrayNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSCreateEmptyLiteralArrayNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSCreateEmptyLiteralArray);
+  }
+
+  const FeedbackParameter& Parameters() const {
+    return FeedbackParameterOf(node()->op());
+  }
+
+#define INPUTS(V) V(FeedbackVector, feedback_vector, 0, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStoreDataPropertyInLiteralNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStoreDataPropertyInLiteralNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreDataPropertyInLiteral);
+  }
+
+  const FeedbackParameter& Parameters() const {
+    return FeedbackParameterOf(node()->op());
+  }
+
+#define INPUTS(V)              \
+  V(Object, object, 0, Object) \
+  V(Name, name, 1, Object)     \
+  V(Value, value, 2, Object)   \
+  V(Flags, flags, 3, Object)   \
+  V(FeedbackVector, feedback_vector, 4, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSStoreInArrayLiteralNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSStoreInArrayLiteralNode(Node* node)
+      : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSStoreInArrayLiteral);
+  }
+
+  const FeedbackParameter& Parameters() const {
+    return FeedbackParameterOf(node()->op());
+  }
+
+#define INPUTS(V)            \
+  V(Array, array, 0, Object) \
+  V(Index, index, 1, Object) \
+  V(Value, value, 2, Object) \
+  V(FeedbackVector, feedback_vector, 3, HeapObject)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+};
+
+class JSCreateClosureNode final : public JSNodeWrapperBase {
+ public:
+  explicit constexpr JSCreateClosureNode(Node* node) : JSNodeWrapperBase(node) {
+    CONSTEXPR_DCHECK(node->opcode() == IrOpcode::kJSCreateClosure);
+  }
+
+  const CreateClosureParameters& Parameters() const {
+    return CreateClosureParametersOf(node()->op());
+  }
+
+#define INPUTS(V) V(FeedbackCell, feedback_cell, 0, FeedbackCell)
+  INPUTS(DEFINE_INPUT_ACCESSORS)
+#undef INPUTS
+
+  FeedbackCellRef GetFeedbackCellRefChecked(JSHeapBroker* broker) const;
+};
+
+#undef DEFINE_INPUT_ACCESSORS
 
 }  // namespace compiler
 }  // namespace internal

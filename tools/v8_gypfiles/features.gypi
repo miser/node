@@ -109,9 +109,6 @@
     # Enable fast mksnapshot runs.
     'v8_enable_fast_mksnapshot%': 0,
 
-    # Enable embedded builtins.
-    'v8_enable_embedded_builtins%': 1,
-
     # Enable the registration of unwinding info for Windows/x64 and ARM64.
     'v8_win64_unwinding_info%': 1,
 
@@ -130,6 +127,9 @@
     # Enable pointer compression (sets -dV8_COMPRESS_POINTERS).
     'v8_enable_pointer_compression%': 0,
     'v8_enable_31bit_smis_on_64bit_arch%': 0,
+
+    # Reverse JS arguments order in the stack (sets -dV8_REVERSE_JSARGS).
+    'v8_enable_reverse_jsargs%': 0,
 
     # Sets -dOBJECT_PRINT.
     'v8_enable_object_print%': 0,
@@ -184,6 +184,15 @@
     # Enable lazy source positions by default.
     'v8_enable_lazy_source_positions%': 1,
 
+    # Enable third party HEAP library
+    'v8_enable_third_party_heap%': 0,
+
+    # Libaries used by third party heap
+    'v8_third_party_heap_libs%': [],
+
+    # Source code used by third party heap
+    'v8_third_party_heap_files%': [],
+
     # Disable write barriers when GCs are non-incremental and
     # heap has single generation.
     'v8_disable_write_barriers%': 0,
@@ -196,11 +205,22 @@
     # Use switch-based dispatch if this is false.
     'v8_enable_regexp_interpreter_threaded_dispatch%': 1,
 
-    # Variables from v8.gni
+    # Disable all snapshot compression.
+    'v8_enable_snapshot_compression%': 1,
 
-    # Enable the snapshot feature, for fast context creation.
-    # http://v8project.blogspot.com/2015/09/custom-startup-snapshots.html
-    'v8_use_snapshot%': 1,
+    # Enable control-flow integrity features, such as pointer authentication
+    # for ARM64.
+    'v8_control_flow_integrity%': 0,
+
+    # Enable V8 zone compression experimental feature.
+    # Sets -DV8_COMPRESS_ZONES.
+    'v8_enable_zone_compression%': 0,
+
+    # Experimental feature for collecting per-class zone memory stats.
+    # Requires use_rtti = true
+    'v8_enable_precise_zone_stats%': 0,
+
+    # Variables from v8.gni
 
     # Enable ECMAScript Internationalization API. Enabling this feature will
     # add a dependency on the ICU library.
@@ -225,10 +245,7 @@
         'defines': ['V8_ENABLE_FUTURE',],
       }],
       ['v8_enable_lite_mode==1', {
-        'defines': [
-          'V8_LITE_MODE',
-          'V8_JITLESS_MODE',
-        ],
+        'defines': ['V8_LITE_MODE',],
       }],
       ['v8_enable_gdbjit==1', {
         'defines': ['ENABLE_GDB_JIT_INTERFACE',],
@@ -241,6 +258,9 @@
       }],
       ['v8_enable_pointer_compression==1 or v8_enable_31bit_smis_on_64bit_arch==1', {
         'defines': ['V8_31BIT_SMIS_ON_64BIT_ARCH',],
+      }],
+      ['v8_enable_zone_compression==1', {
+        'defines': ['V8_COMPRESS_ZONES',],
       }],
       ['v8_enable_object_print==1', {
         'defines': ['OBJECT_PRINT',],
@@ -280,6 +300,9 @@
       },{
         'defines!': ['V8_IMMINENT_DEPRECATION_WARNINGS',],
       }],
+      ['v8_enable_reverse_jsargs==1', {
+        'defines': ['V8_REVERSE_JSARGS',],
+      }],
       ['v8_enable_i18n_support==1', {
         'defines': ['V8_INTL_SUPPORT',],
       }],
@@ -287,19 +310,17 @@
       # ['v8_enable_handle_zapping==1', {
       #  'defines': ['ENABLE_HANDLE_ZAPPING',],
       # }],
-      ['v8_use_snapshot==1', {
-        'defines': ['V8_USE_SNAPSHOT',],
-        'conditions': [
-          ['v8_enable_snapshot_native_code_counters==1', {
-            'defines': ['V8_SNAPSHOT_NATIVE_CODE_COUNTERS',],
-          }],
-        ],
+      ['v8_enable_snapshot_native_code_counters==1', {
+        'defines': ['V8_SNAPSHOT_NATIVE_CODE_COUNTERS',],
       }],
       ['v8_enable_single_generation==1', {
         'defines': ['V8_ENABLE_SINGLE_GENERATION',],
       }],
       ['v8_disable_write_barriers==1', {
         'defines': ['V8_DISABLE_WRITE_BARRIERS',],
+      }],
+      ['v8_enable_third_party_heap==1', {
+        'defines': ['V8_ENABLE_THIRD_PARTY_HEAP',],
       }],
       ['v8_enable_concurrent_marking==1', {
         'defines': ['V8_CONCURRENT_MARKING',],
@@ -309,9 +330,6 @@
       }],
       ['v8_check_microtasks_scopes_consistency==1', {
         'defines': ['V8_CHECK_MICROTASKS_SCOPES_CONSISTENCY',],
-      }],
-      ['v8_enable_embedded_builtins==1', {
-        'defines': ['V8_EMBEDDED_BUILTINS',],
       }],
       ['v8_use_siphash==1', {
         'defines': ['V8_USE_SIPHASH',],
@@ -333,6 +351,15 @@
       }],
       ['v8_enable_regexp_interpreter_threaded_dispatch==1', {
         'defines': ['V8_ENABLE_REGEXP_INTERPRETER_THREADED_DISPATCH',],
+      }],
+      ['v8_enable_snapshot_compression==1', {
+        'defines': ['V8_SNAPSHOT_COMPRESSION',],
+      }],
+      ['v8_control_flow_integrity==1', {
+        'defines': ['V8_ENABLE_CONTROL_FLOW_INTEGRITY',],
+      }],
+      ['v8_enable_precise_zone_stats==1', {
+        'defines': ['V8_ENABLE_PRECISE_ZONE_STATS',],
       }],
     ],  # conditions
     'defines': [

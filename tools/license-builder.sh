@@ -32,6 +32,7 @@ fi
 addlicense "Acorn" "deps/acorn" "$(cat ${rootdir}/deps/acorn/acorn/LICENSE)"
 addlicense "Acorn plugins" "deps/acorn-plugins" "$(cat ${rootdir}/deps/acorn-plugins/acorn-class-fields/LICENSE)"
 addlicense "c-ares" "deps/cares" "$(tail -n +3 ${rootdir}/deps/cares/LICENSE.md)"
+addlicense "cjs-module-lexer" "deps/cjs-module-lexer" "$(cat ${rootdir}/deps/cjs-module-lexer/LICENSE)"
 if [ -f "${rootdir}/deps/icu/LICENSE" ]; then
   # ICU 57 and following. Drop the BOM
   addlicense "ICU" "deps/icu" \
@@ -88,6 +89,12 @@ addlicense "gtest" "test/cctest/gtest" "$(cat ${rootdir}/test/cctest/gtest/LICEN
 # nghttp2
 addlicense "nghttp2" "deps/nghttp2" "$(cat ${rootdir}/deps/nghttp2/COPYING)"
 
+# ngtcp2
+addlicense "ngtcp2" "deps/ngtcp2" "$(cat ${rootdir}/deps/ngtcp2/COPYING)"
+
+# nghttp3
+addlicense "nghttp3" "deps/nghttp3" "$(cat ${rootdir}/deps/nghttp3/COPYING)"
+
 # node-inspect
 addlicense "node-inspect" "deps/node-inspect" "$(cat ${rootdir}/deps/node-inspect/LICENSE)"
 
@@ -102,10 +109,15 @@ addlicense "brotli" "deps/brotli" "$(cat ${rootdir}/deps/brotli/LICENSE)"
 
 addlicense "HdrHistogram" "deps/histogram" "$(cat ${rootdir}/deps/histogram/LICENSE.txt)"
 
+addlicense "highlight.js" "doc/api_assets/highlight.pack.js" \
+           "$(curl -sL https://raw.githubusercontent.com/highlightjs/highlight.js/63f367c46f2eeb6f9b7a3545e325eeeb917f9942/LICENSE)"
+
 addlicense "node-heapdump" "src/heap_utils.cc" \
            "$(curl -sL https://raw.githubusercontent.com/bnoordhuis/node-heapdump/0ca52441e46241ffbea56a389e2856ec01c48c97/LICENSE)"
 
 addlicense "rimraf" "lib/internal/fs/rimraf.js" \
            "$(curl -sL https://raw.githubusercontent.com/isaacs/rimraf/0e365ac4e4d64a25aa2a3cc026348f13410210e1/LICENSE)"
+
+addlicense "uvwasi" "deps/uvwasi" "$(cat ${rootdir}/deps/uvwasi/LICENSE)"
 
 mv $tmplicense $licensefile

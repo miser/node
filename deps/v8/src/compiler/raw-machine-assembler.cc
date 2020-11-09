@@ -22,8 +22,8 @@ RawMachineAssembler::RawMachineAssembler(
     PoisoningMitigationLevel poisoning_level)
     : isolate_(isolate),
       graph_(graph),
-      schedule_(new (zone()) Schedule(zone())),
-      source_positions_(new (zone()) SourcePositionTable(graph)),
+      schedule_(zone()->New<Schedule>(zone())),
+      source_positions_(zone()->New<SourcePositionTable>(graph)),
       machine_(zone(), word, flags, alignment_requirements),
       common_(zone()),
       simplified_(zone()),
@@ -47,11 +47,22 @@ RawMachineAssembler::RawMachineAssembler(
   source_positions_->AddDecorator();
 }
 
-void RawMachineAssembler::SetSourcePosition(const char* file, int line) {
-  int file_id = isolate()->LookupOrAddExternallyCompiledFilename(file);
-  SourcePosition p = SourcePosition::External(line, file_id);
-  DCHECK(p.ExternalLine() == line);
+void RawMachineAssembler::SetCurrentExternalSourcePosition(
+    FileAndLine file_and_line) {
+  int file_id =
+      isolate()->LookupOrAddExternallyCompiledFilename(file_and_line.first);
+  SourcePosition p = SourcePosition::External(file_and_line.second, file_id);
+  DCHECK(p.ExternalLine() == file_and_line.second);
   source_positions()->SetCurrentPosition(p);
+}
+
+FileAndLine RawMachineAssembler::GetCurrentExternalSourcePosition() const {
+  SourcePosition p = source_positions_->GetCurrentPosition();
+  if (!p.IsKnown()) return {nullptr, -1};
+  int file_id = p.ExternalFileId();
+  const char* file_name = isolate()->GetExternallyCompiledFilename(file_id);
+  int line = p.ExternalLine();
+  return {file_name, line};
 }
 
 Node* RawMachineAssembler::NullConstant() {
@@ -669,8 +680,8 @@ void RawMachineAssembler::Comment(const std::string& msg) {
   AddNode(machine()->Comment(zone_buffer));
 }
 
-void RawMachineAssembler::StaticAssert(Node* value) {
-  AddNode(common()->StaticAssert(), value);
+void RawMachineAssembler::StaticAssert(Node* value, const char* source) {
+  AddNode(common()->StaticAssert(source), value);
 }
 
 Node* RawMachineAssembler::CallN(CallDescriptor* call_descriptor,
@@ -690,35 +701,38 @@ Node* RawMachineAssembler::CallNWithFrameState(CallDescriptor* call_descriptor,
   return AddNode(common()->Call(call_descriptor), input_count, inputs);
 }
 
-Node* RawMachineAssembler::TailCallN(CallDescriptor* call_descriptor,
-                                     int input_count, Node* const* inputs) {
+void RawMachineAssembler::TailCallN(CallDescriptor* call_descriptor,
+                                    int input_count, Node* const* inputs) {
   // +1 is for target.
   DCHECK_EQ(input_count, call_descriptor->ParameterCount() + 1);
   Node* tail_call =
       MakeNode(common()->TailCall(call_descriptor), input_count, inputs);
   schedule()->AddTailCall(CurrentBlock(), tail_call);
   current_block_ = nullptr;
-  return tail_call;
 }
 
 namespace {
 
+enum FunctionDescriptorMode { kHasFunctionDescriptor, kNoFunctionDescriptor };
+
 Node* CallCFunctionImpl(
     RawMachineAssembler* rasm, Node* function, MachineType return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args,
-    bool caller_saved_regs, SaveFPRegsMode mode) {
+    bool caller_saved_regs, SaveFPRegsMode mode,
+    FunctionDescriptorMode no_function_descriptor) {
   static constexpr std::size_t kNumCArgs = 10;
 
   MachineSignature::Builder builder(rasm->zone(), 1, args.size());
   builder.AddReturn(return_type);
   for (const auto& arg : args) builder.AddParam(arg.first);
 
-  auto call_descriptor = Linkage::GetSimplifiedCDescriptor(
-      rasm->zone(), builder.Build(),
-      caller_saved_regs ? CallDescriptor::kCallerSavedRegisters
-                        : CallDescriptor::kNoFlags);
-
-  if (caller_saved_regs) call_descriptor->set_save_fp_mode(mode);
+  bool caller_saved_fp_regs = caller_saved_regs && (mode == kSaveFPRegs);
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  if (caller_saved_regs) flags |= CallDescriptor::kCallerSavedRegisters;
+  if (caller_saved_fp_regs) flags |= CallDescriptor::kCallerSavedFPRegisters;
+  if (no_function_descriptor) flags |= CallDescriptor::kNoFunctionDescriptor;
+  auto call_descriptor =
+      Linkage::GetSimplifiedCDescriptor(rasm->zone(), builder.Build(), flags);
 
   base::SmallVector<Node*, kNumCArgs> nodes(args.size() + 1);
   nodes[0] = function;
@@ -737,13 +751,21 @@ Node* RawMachineAssembler::CallCFunction(
     Node* function, MachineType return_type,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
   return CallCFunctionImpl(this, function, return_type, args, false,
-                           kDontSaveFPRegs);
+                           kDontSaveFPRegs, kHasFunctionDescriptor);
+}
+
+Node* RawMachineAssembler::CallCFunctionWithoutFunctionDescriptor(
+    Node* function, MachineType return_type,
+    std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
+  return CallCFunctionImpl(this, function, return_type, args, false,
+                           kDontSaveFPRegs, kNoFunctionDescriptor);
 }
 
 Node* RawMachineAssembler::CallCFunctionWithCallerSavedRegisters(
     Node* function, MachineType return_type, SaveFPRegsMode mode,
     std::initializer_list<RawMachineAssembler::CFunctionArg> args) {
-  return CallCFunctionImpl(this, function, return_type, args, true, mode);
+  return CallCFunctionImpl(this, function, return_type, args, true, mode,
+                           kHasFunctionDescriptor);
 }
 
 BasicBlock* RawMachineAssembler::Use(RawMachineLabel* label) {
@@ -799,8 +821,7 @@ BasicBlock* RawMachineAssembler::CurrentBlock() {
 
 Node* RawMachineAssembler::Phi(MachineRepresentation rep, int input_count,
                                Node* const* inputs) {
-  Node** buffer = new (zone()->New(sizeof(Node*) * (input_count + 1)))
-      Node*[input_count + 1];
+  Node** buffer = zone()->NewArray<Node*>(input_count + 1);
   std::copy(inputs, inputs + input_count, buffer);
   buffer[input_count] = graph()->start();
   return AddNode(common()->Phi(rep, input_count), input_count + 1, buffer);

@@ -2,6 +2,7 @@
 
 const common = require('../common');
 const fs = require('fs');
+const { once } = require('events');
 const { join } = require('path');
 const readline = require('readline');
 const assert = require('assert');
@@ -45,6 +46,8 @@ async function testSimpleDestroy() {
 
     rli.close();
     readable.destroy();
+
+    await once(readable, 'close');
   }
 }
 
@@ -72,12 +75,15 @@ async function testMutualDestroy() {
         break;
       }
       assert.deepStrictEqual(iteratedLines, expectedLines);
+      break;
     }
 
     assert.deepStrictEqual(iteratedLines, expectedLines);
 
     rli.close();
     readable.destroy();
+
+    await once(readable, 'close');
   }
 }
 

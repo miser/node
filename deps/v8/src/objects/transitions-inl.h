@@ -64,6 +64,10 @@ Name TransitionArray::GetKey(int transition_number) {
       Get(ToKeyIndex(transition_number))->GetHeapObjectAssumeStrong());
 }
 
+Name TransitionArray::GetKey(InternalIndex index) {
+  return GetKey(index.as_int());
+}
+
 Name TransitionsAccessor::GetKey(int transition_number) {
   switch (encoding()) {
     case kPrototypeInfo:
@@ -95,7 +99,7 @@ HeapObjectSlot TransitionArray::GetTargetSlot(int transition_number) {
 // static
 PropertyDetails TransitionsAccessor::GetTargetDetails(Name name, Map target) {
   DCHECK(!IsSpecialTransition(name.GetReadOnlyRoots(), name));
-  int descriptor = target.LastAdded();
+  InternalIndex descriptor = target.LastAdded();
   DescriptorArray descriptors = target.instance_descriptors();
   // Transitions are allowed only for the last added property.
   DCHECK(descriptors.GetKey(descriptor).Equals(name));
@@ -108,7 +112,7 @@ PropertyDetails TransitionsAccessor::GetSimpleTargetDetails(Map transition) {
 
 // static
 Name TransitionsAccessor::GetSimpleTransitionKey(Map transition) {
-  int descriptor = transition.LastAdded();
+  InternalIndex descriptor = transition.LastAdded();
   return transition.instance_descriptors().GetKey(descriptor);
 }
 
@@ -177,13 +181,17 @@ int TransitionArray::SearchName(Name name, int* out_insertion_index) {
 
 TransitionsAccessor::TransitionsAccessor(Isolate* isolate, Map map,
                                          DisallowHeapAllocation* no_gc)
-    : isolate_(isolate), map_(map) {
+    : isolate_(isolate), map_(map), concurrent_access_(false) {
   Initialize();
   USE(no_gc);
 }
 
-TransitionsAccessor::TransitionsAccessor(Isolate* isolate, Handle<Map> map)
-    : isolate_(isolate), map_handle_(map), map_(*map) {
+TransitionsAccessor::TransitionsAccessor(Isolate* isolate, Handle<Map> map,
+                                         bool concurrent_access)
+    : isolate_(isolate),
+      map_handle_(map),
+      map_(*map),
+      concurrent_access_(concurrent_access) {
   Initialize();
 }
 
@@ -192,6 +200,8 @@ void TransitionsAccessor::Reload() {
   map_ = *map_handle_;
   Initialize();
 }
+
+int TransitionsAccessor::Capacity() { return transitions().Capacity(); }
 
 void TransitionsAccessor::Initialize() {
   raw_transitions_ = map_.raw_transitions(isolate_);

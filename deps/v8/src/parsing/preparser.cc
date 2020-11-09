@@ -6,6 +6,7 @@
 
 #include "src/base/logging.h"
 #include "src/common/globals.h"
+#include "src/logging/counters.h"
 #include "src/numbers/conversions-inl.h"
 #include "src/numbers/conversions.h"
 #include "src/parsing/parser-base.h"
@@ -56,7 +57,7 @@ PreParserIdentifier GetIdentifierHelper(Scanner* scanner,
   return PreParserIdentifier::Default();
 }
 
-}  // unnamed namespace
+}  // namespace
 
 PreParserIdentifier PreParser::GetIdentifier() const {
   const AstRawString* result = scanner()->CurrentSymbol(ast_value_factory());
@@ -69,19 +70,15 @@ PreParserIdentifier PreParser::GetIdentifier() const {
 
 PreParser::PreParseResult PreParser::PreParseProgram() {
   DCHECK_NULL(scope_);
-  DeclarationScope* scope = NewScriptScope();
+  DeclarationScope* scope = NewScriptScope(REPLMode::kNo);
 #ifdef DEBUG
   scope->set_is_being_lazily_parsed(true);
 #endif
 
-  // Note: We should only skip the hashbang in non-Eval scripts
-  // (currently, Eval is not handled by the PreParser).
-  scanner()->SkipHashBang();
-
   // ModuleDeclarationInstantiation for Source Text Module Records creates a
   // new Module Environment Record whose outer lexical environment record is
   // the global scope.
-  if (parsing_module_) scope = NewModuleScope(scope);
+  if (flags().is_module()) scope = NewModuleScope(scope);
 
   FunctionState top_scope(&function_state_, &scope_, scope);
   original_scope_ = scope_;
@@ -108,11 +105,9 @@ void PreParserFormalParameters::ValidateStrictMode(PreParser* preparser) const {
 PreParser::PreParseResult PreParser::PreParseFunction(
     const AstRawString* function_name, FunctionKind kind,
     FunctionSyntaxKind function_syntax_kind, DeclarationScope* function_scope,
-    int* use_counts, ProducedPreparseData** produced_preparse_data,
-    int script_id) {
+    int* use_counts, ProducedPreparseData** produced_preparse_data) {
   DCHECK_EQ(FUNCTION_SCOPE, function_scope->scope_type());
   use_counts_ = use_counts;
-  set_script_id(script_id);
 #ifdef DEBUG
   function_scope->set_is_being_lazily_parsed(true);
 #endif
@@ -271,16 +266,16 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
     int function_token_pos, FunctionSyntaxKind function_syntax_kind,
     LanguageMode language_mode,
     ZonePtrList<const AstRawString>* arguments_for_wrapped_function) {
+  FunctionParsingScope function_parsing_scope(this);
   // Wrapped functions are not parsed in the preparser.
   DCHECK_NULL(arguments_for_wrapped_function);
   DCHECK_NE(FunctionSyntaxKind::kWrapped, function_syntax_kind);
   // Function ::
   //   '(' FormalParameterList? ')' '{' FunctionBody '}'
-  const RuntimeCallCounterId counters[2] = {
-      RuntimeCallCounterId::kPreParseBackgroundWithVariableResolution,
-      RuntimeCallCounterId::kPreParseWithVariableResolution};
-  RuntimeCallTimerScope runtime_timer(runtime_call_stats_,
-                                      counters[parsing_on_main_thread_]);
+  RuntimeCallTimerScope runtime_timer(
+      runtime_call_stats_,
+      RuntimeCallCounterId::kPreParseWithVariableResolution,
+      RuntimeCallStats::kThreadSpecific);
 
   base::ElapsedTimer timer;
   if (V8_UNLIKELY(FLAG_log_function_events)) timer.Start();
@@ -330,10 +325,6 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
     // Parsing the body may change the language mode in our scope.
     language_mode = function_scope->language_mode();
 
-    if (is_sloppy(language_mode)) {
-      function_scope->HoistSloppyBlockFunctions(nullptr);
-    }
-
     // Validate name and parameter names. We can do this only after parsing the
     // function, since the function can declare itself strict.
     CheckFunctionName(language_mode, function_name, function_name_validity,
@@ -362,7 +353,7 @@ PreParser::Expression PreParser::ParseFunctionLiteral(
       name_byte_length = string->byte_length();
     }
     logger_->FunctionEvent(
-        event_name, script_id(), ms, function_scope->start_position(),
+        event_name, flags().script_id(), ms, function_scope->start_position(),
         function_scope->end_position(), name, name_byte_length);
   }
 

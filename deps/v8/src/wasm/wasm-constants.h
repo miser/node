@@ -18,20 +18,34 @@ namespace wasm {
 constexpr uint32_t kWasmMagic = 0x6d736100;
 constexpr uint32_t kWasmVersion = 0x01;
 
-// Binary encoding of local types.
+// Binary encoding of value and heap types.
 enum ValueTypeCode : uint8_t {
+  // Current wasm types
   kLocalVoid = 0x40,
   kLocalI32 = 0x7f,
   kLocalI64 = 0x7e,
   kLocalF32 = 0x7d,
   kLocalF64 = 0x7c,
+  // Simd proposal
   kLocalS128 = 0x7b,
+  // reftypes, typed-funcref, and GC proposals
+  kLocalI8 = 0x7a,
+  kLocalI16 = 0x79,
   kLocalFuncRef = 0x70,
-  kLocalAnyRef = 0x6f,
+  kLocalExternRef = 0x6f,
+  // kLocalAny = 0x6e, // TODO(7748): Implement
+  kLocalEqRef = 0x6d,
+  kLocalOptRef = 0x6c,
+  kLocalRef = 0x6b,
+  kLocalI31Ref = 0x6a,
+  kLocalRtt = 0x69,
+  // Exception handling proposal
   kLocalExnRef = 0x68,
 };
 // Binary encoding of other types.
 constexpr uint8_t kWasmFunctionTypeCode = 0x60;
+constexpr uint8_t kWasmStructTypeCode = 0x5f;
+constexpr uint8_t kWasmArrayTypeCode = 0x5e;
 
 // Binary encoding of import/export kinds.
 enum ImportExportKindCode : uint8_t {
@@ -79,9 +93,11 @@ enum SectionCode : int8_t {
   // The following sections are custom sections, and are identified using a
   // string rather than an integer. Their enumeration values are not guaranteed
   // to be consistent.
-  kNameSectionCode,              // Name section (encoded as a string)
-  kSourceMappingURLSectionCode,  // Source Map URL section
-  kCompilationHintsSectionCode,  // Compilation hints section
+  kNameSectionCode,               // Name section (encoded as a string)
+  kSourceMappingURLSectionCode,   // Source Map URL section
+  kDebugInfoSectionCode,          // DWARF section .debug_info
+  kExternalDebugInfoSectionCode,  // Section encoding the external symbol path
+  kCompilationHintsSectionCode,   // Compilation hints section
 
   // Helper values
   kFirstSectionInModule = kTypeSectionCode,
@@ -106,7 +122,7 @@ constexpr WasmCodePosition kNoCodePosition = -1;
 
 constexpr uint32_t kExceptionAttribute = 0;
 
-constexpr uint32_t kAnonymousFuncIndex = 0xffffffff;
+constexpr int kAnonymousFuncIndex = -1;
 
 }  // namespace wasm
 }  // namespace internal

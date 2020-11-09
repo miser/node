@@ -161,6 +161,11 @@ class TestCase(object):
             statusfile.CRASH not in self._statusfile_outcomes)
 
   @property
+  def is_fail(self):
+     return (statusfile.FAIL in self._statusfile_outcomes and
+             statusfile.PASS not in self._statusfile_outcomes)
+
+  @property
   def only_standard_variant(self):
     return statusfile.NO_VARIANTS in self._statusfile_outcomes
 
@@ -271,6 +276,7 @@ class TestCase(object):
       timeout=timeout,
       verbose=self._test_config.verbose,
       resources_func=self._get_resources,
+      handle_sigterm=True,
     )
 
   def _parse_source_flags(self, source=None):

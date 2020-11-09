@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/init/v8.h"
+#include <vector>
 
-#include "src/heap/spaces.h"
+#include "src/heap/heap.h"
+#include "src/heap/memory-allocator.h"
+#include "src/init/v8.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 
@@ -30,10 +32,6 @@ class MockPlatformForUnmapper : public TestPlatform {
       old_platform_->CallOnWorkerThread(std::move(task));
     }
     worker_tasks_.clear();
-  }
-
-  void CallOnForegroundThread(v8::Isolate* isolate, Task* task) override {
-    task_ = task;
   }
 
   void CallOnWorkerThread(std::unique_ptr<Task> task) override {

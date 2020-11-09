@@ -1,6 +1,7 @@
 #include "env-inl.h"
 #include "node.h"
 #include "node_errors.h"
+#include "node_external_reference.h"
 #include "node_internals.h"
 #include "node_process.h"
 #include "util-inl.h"
@@ -11,7 +12,6 @@
 namespace node {
 
 using errors::TryCatchScope;
-using v8::Array;
 using v8::Context;
 using v8::Function;
 using v8::FunctionCallbackInfo;
@@ -21,7 +21,6 @@ using v8::kPromiseRejectAfterResolved;
 using v8::kPromiseRejectWithNoHandler;
 using v8::kPromiseResolveAfterResolved;
 using v8::Local;
-using v8::Message;
 using v8::MicrotasksScope;
 using v8::Number;
 using v8::Object;
@@ -29,43 +28,6 @@ using v8::Promise;
 using v8::PromiseRejectEvent;
 using v8::PromiseRejectMessage;
 using v8::Value;
-
-namespace task_queue {
-
-static void EnqueueMicrotask(const FunctionCallbackInfo<Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
-  Isolate* isolate = env->isolate();
-
-  CHECK(args[0]->IsFunction());
-
-  isolate->EnqueueMicrotask(args[0].As<Function>());
-}
-
-// Should be in sync with runNextTicks in internal/process/task_queues.js
-bool RunNextTicksNative(Environment* env) {
-  OnScopeLeave weakref_cleanup([&]() { env->RunWeakRefCleanup(); });
-
-  TickInfo* tick_info = env->tick_info();
-  if (!tick_info->has_tick_scheduled() && !tick_info->has_rejection_to_warn())
-    MicrotasksScope::PerformCheckpoint(env->isolate());
-  if (!tick_info->has_tick_scheduled() && !tick_info->has_rejection_to_warn())
-    return true;
-
-  Local<Function> callback = env->tick_callback_function();
-  CHECK(!callback.IsEmpty());
-  return !callback->Call(env->context(), env->process_object(), 0, nullptr)
-              .IsEmpty();
-}
-
-static void RunMicrotasks(const FunctionCallbackInfo<Value>& args) {
-  MicrotasksScope::PerformCheckpoint(args.GetIsolate());
-}
-
-static void SetTickCallback(const FunctionCallbackInfo<Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
-  CHECK(args[0]->IsFunction());
-  env->set_tick_callback_function(args[0].As<Function>());
-}
 
 void PromiseRejectCallback(PromiseRejectMessage message) {
   static std::atomic<uint64_t> unhandledRejections{0};
@@ -77,7 +39,7 @@ void PromiseRejectCallback(PromiseRejectMessage message) {
 
   Environment* env = Environment::GetCurrent(isolate);
 
-  if (env == nullptr) return;
+  if (env == nullptr || !env->can_call_into_js()) return;
 
   Local<Function> callback = env->promise_reject_callback();
   // The promise is rejected before JS land calls SetPromiseRejectCallback
@@ -126,6 +88,26 @@ void PromiseRejectCallback(PromiseRejectMessage message) {
     PrintCaughtException(isolate, env->context(), try_catch);
   }
 }
+namespace task_queue {
+
+static void EnqueueMicrotask(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+  Isolate* isolate = env->isolate();
+
+  CHECK(args[0]->IsFunction());
+
+  isolate->EnqueueMicrotask(args[0].As<Function>());
+}
+
+static void RunMicrotasks(const FunctionCallbackInfo<Value>& args) {
+  MicrotasksScope::PerformCheckpoint(args.GetIsolate());
+}
+
+static void SetTickCallback(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+  CHECK(args[0]->IsFunction());
+  env->set_tick_callback_function(args[0].As<Function>());
+}
 
 static void SetPromiseRejectCallback(
     const FunctionCallbackInfo<Value>& args) {
@@ -163,7 +145,16 @@ static void Initialize(Local<Object> target,
                  SetPromiseRejectCallback);
 }
 
+void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
+  registry->Register(EnqueueMicrotask);
+  registry->Register(SetTickCallback);
+  registry->Register(RunMicrotasks);
+  registry->Register(SetPromiseRejectCallback);
+}
+
 }  // namespace task_queue
 }  // namespace node
 
 NODE_MODULE_CONTEXT_AWARE_INTERNAL(task_queue, node::task_queue::Initialize)
+NODE_MODULE_EXTERNAL_REFERENCE(task_queue,
+                               node::task_queue::RegisterExternalReferences)

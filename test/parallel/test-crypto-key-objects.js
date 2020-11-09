@@ -15,8 +15,10 @@ const {
   createPrivateKey,
   KeyObject,
   randomBytes,
+  publicDecrypt,
   publicEncrypt,
-  privateDecrypt
+  privateDecrypt,
+  privateEncrypt
 } = require('crypto');
 
 const fixtures = require('../common/fixtures');
@@ -30,10 +32,10 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 
 {
   // Attempting to create an empty key should throw.
-  common.expectsError(() => {
+  assert.throws(() => {
     createSecretKey(Buffer.alloc(0));
   }, {
-    type: RangeError,
+    name: 'RangeError',
     code: 'ERR_OUT_OF_RANGE',
     message: 'The value of "key.byteLength" is out of range. ' +
              'It must be > 0. Received 0'
@@ -44,8 +46,8 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
   // Attempting to create a key of a wrong type should throw
   const TYPE = 'wrong_type';
 
-  common.expectsError(() => new KeyObject(TYPE), {
-    type: TypeError,
+  assert.throws(() => new KeyObject(TYPE), {
+    name: 'TypeError',
     code: 'ERR_INVALID_ARG_VALUE',
     message: `The argument 'type' is invalid. Received '${TYPE}'`
   });
@@ -53,11 +55,12 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 
 {
   // Attempting to create a key with non-object handle should throw
-  common.expectsError(() => new KeyObject('secret', ''), {
-    type: TypeError,
+  assert.throws(() => new KeyObject('secret', ''), {
+    name: 'TypeError',
     code: 'ERR_INVALID_ARG_TYPE',
     message:
-      'The "handle" argument must be of type object. Received type string'
+      'The "handle" argument must be of type object. Received type ' +
+      "string ('')"
   });
 }
 
@@ -89,29 +92,25 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 {
   // Passing an existing public key object to createPublicKey should throw.
   const publicKey = createPublicKey(publicPem);
-  common.expectsError(() => createPublicKey(publicKey), {
-    type: TypeError,
+  assert.throws(() => createPublicKey(publicKey), {
+    name: 'TypeError',
     code: 'ERR_CRYPTO_INVALID_KEY_OBJECT_TYPE',
     message: 'Invalid key object type public, expected private.'
   });
 
   // Constructing a private key from a public key should be impossible, even
   // if the public key was derived from a private key.
-  common.expectsError(() => createPrivateKey(createPublicKey(privatePem)), {
-    type: TypeError,
+  assert.throws(() => createPrivateKey(createPublicKey(privatePem)), {
+    name: 'TypeError',
     code: 'ERR_INVALID_ARG_TYPE',
-    message: 'The "key" argument must be one of type string, Buffer, ' +
-             'TypedArray, or DataView. Received type object'
   });
 
   // Similarly, passing an existing private key object to createPrivateKey
   // should throw.
   const privateKey = createPrivateKey(privatePem);
-  common.expectsError(() => createPrivateKey(privateKey), {
-    type: TypeError,
+  assert.throws(() => createPrivateKey(privateKey), {
+    name: 'TypeError',
     code: 'ERR_INVALID_ARG_TYPE',
-    message: 'The "key" argument must be one of type string, Buffer, ' +
-             'TypedArray, or DataView. Received type object'
   });
 }
 
@@ -134,11 +133,10 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 
   // Test exporting with an invalid options object, this should throw.
   for (const opt of [undefined, null, 'foo', 0, NaN]) {
-    common.expectsError(() => publicKey.export(opt), {
-      type: TypeError,
+    assert.throws(() => publicKey.export(opt), {
+      name: 'TypeError',
       code: 'ERR_INVALID_ARG_TYPE',
-      message: 'The "options" argument must be of type object. Received type ' +
-               typeof opt
+      message: /^The "options" argument must be of type object/
     });
   }
 
@@ -156,7 +154,16 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
   assert(Buffer.isBuffer(privateDER));
 
   const plaintext = Buffer.from('Hello world', 'utf8');
-  const ciphertexts = [
+  const testDecryption = (fn, ciphertexts, decryptionKeys) => {
+    for (const ciphertext of ciphertexts) {
+      for (const key of decryptionKeys) {
+        const deciphered = fn(key, ciphertext);
+        assert.deepStrictEqual(deciphered, plaintext);
+      }
+    }
+  };
+
+  testDecryption(privateDecrypt, [
     // Encrypt using the public key.
     publicEncrypt(publicKey, plaintext),
     publicEncrypt({ key: publicKey }, plaintext),
@@ -173,20 +180,25 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
     // DER-encoded data only.
     publicEncrypt({ format: 'der', type: 'pkcs1', key: publicDER }, plaintext),
     publicEncrypt({ format: 'der', type: 'pkcs1', key: privateDER }, plaintext)
-  ];
-
-  const decryptionKeys = [
+  ], [
     privateKey,
     { format: 'pem', key: privatePem },
     { format: 'der', type: 'pkcs1', key: privateDER }
-  ];
+  ]);
 
-  for (const ciphertext of ciphertexts) {
-    for (const key of decryptionKeys) {
-      const deciphered = privateDecrypt(key, ciphertext);
-      assert(plaintext.equals(deciphered));
-    }
-  }
+  testDecryption(publicDecrypt, [
+    privateEncrypt(privateKey, plaintext)
+  ], [
+    // Decrypt using the public key.
+    publicKey,
+    { format: 'pem', key: publicPem },
+    { format: 'der', type: 'pkcs1', key: publicDER },
+
+    // Decrypt using the private key.
+    privateKey,
+    { format: 'pem', key: privatePem },
+    { format: 'der', type: 'pkcs1', key: privateDER }
+  ]);
 }
 
 {
@@ -194,19 +206,19 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
   assert.throws(() => {
     createPrivateKey({ key: '' });
   }, {
-    message: 'error:2007E073:BIO routines:BIO_new_mem_buf:null parameter',
-    code: 'ERR_OSSL_BIO_NULL_PARAMETER',
-    reason: 'null parameter',
-    library: 'BIO routines',
-    function: 'BIO_new_mem_buf',
+    message: 'error:0909006C:PEM routines:get_name:no start line',
+    code: 'ERR_OSSL_PEM_NO_START_LINE',
+    reason: 'no start line',
+    library: 'PEM routines',
+    function: 'get_name',
   });
 
   // This should not abort either: https://github.com/nodejs/node/issues/29904
   assert.throws(() => {
     createPrivateKey({ key: Buffer.alloc(0), format: 'der', type: 'spki' });
   }, {
-    code: 'ERR_INVALID_OPT_VALUE',
-    message: 'The value "spki" is invalid for option "type"'
+    code: 'ERR_INVALID_ARG_VALUE',
+    message: "The property 'options.type' is invalid. Received 'spki'"
   });
 
   // Unlike SPKI, PKCS#1 is a valid encoding for private keys (and public keys),
@@ -262,26 +274,26 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 
 {
   // Reading an encrypted key without a passphrase should fail.
-  common.expectsError(() => createPrivateKey(privateDsa), {
-    type: TypeError,
+  assert.throws(() => createPrivateKey(privateDsa), {
+    name: 'TypeError',
     code: 'ERR_MISSING_PASSPHRASE',
     message: 'Passphrase required for encrypted key'
   });
 
   // Reading an encrypted key with a passphrase that exceeds OpenSSL's buffer
   // size limit should fail with an appropriate error code.
-  common.expectsError(() => createPrivateKey({
+  assert.throws(() => createPrivateKey({
     key: privateDsa,
     format: 'pem',
     passphrase: Buffer.alloc(1025, 'a')
   }), {
     code: 'ERR_OSSL_PEM_BAD_PASSWORD_READ',
-    type: Error
+    name: 'Error'
   });
 
   // The buffer has a size of 1024 bytes, so this passphrase should be permitted
   // (but will fail decryption).
-  common.expectsError(() => createPrivateKey({
+  assert.throws(() => createPrivateKey({
     key: privateDsa,
     format: 'pem',
     passphrase: Buffer.alloc(1024, 'a')
@@ -344,7 +356,7 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 
     // Exporting the key using PKCS#1 should not work since this would discard
     // any algorithm restrictions.
-    common.expectsError(() => {
+    assert.throws(() => {
       publicKey.export({ format: 'pem', type: 'pkcs1' });
     }, {
       code: 'ERR_CRYPTO_INCOMPATIBLE_KEY_OPTIONS'
@@ -447,13 +459,13 @@ const privateDsa = fixtures.readKey('dsa_private_encrypted_1025.pem',
 {
   // Exporting an encrypted private key requires a cipher
   const privateKey = createPrivateKey(privatePem);
-  common.expectsError(() => {
+  assert.throws(() => {
     privateKey.export({
       format: 'pem', type: 'pkcs8', passphrase: 'super-secret'
     });
   }, {
-    type: TypeError,
-    code: 'ERR_INVALID_OPT_VALUE',
-    message: 'The value "undefined" is invalid for option "cipher"'
+    name: 'TypeError',
+    code: 'ERR_INVALID_ARG_VALUE',
+    message: "The property 'options.cipher' is invalid. Received undefined"
   });
 }

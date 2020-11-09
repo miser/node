@@ -5,12 +5,12 @@
 #ifndef V8_OBJECTS_FEEDBACK_VECTOR_INL_H_
 #define V8_OBJECTS_FEEDBACK_VECTOR_INL_H_
 
-#include "src/objects/feedback-vector.h"
-
 #include "src/common/globals.h"
 #include "src/heap/factory-inl.h"
 #include "src/heap/heap-write-barrier-inl.h"
 #include "src/objects/code-inl.h"
+#include "src/objects/feedback-cell-inl.h"
+#include "src/objects/feedback-vector.h"
 #include "src/objects/maybe-object-inl.h"
 #include "src/objects/shared-function-info.h"
 #include "src/objects/smi.h"
@@ -149,26 +149,28 @@ bool FeedbackVector::has_optimization_marker() const {
 
 // Conversion from an integer index to either a slot or an ic slot.
 // static
-FeedbackSlot FeedbackVector::ToSlot(int index) {
-  DCHECK_GE(index, 0);
-  return FeedbackSlot(index);
+FeedbackSlot FeedbackVector::ToSlot(intptr_t index) {
+  DCHECK_LE(static_cast<uintptr_t>(index),
+            static_cast<uintptr_t>(std::numeric_limits<int>::max()));
+  return FeedbackSlot(static_cast<int>(index));
 }
 
 MaybeObject FeedbackVector::Get(FeedbackSlot slot) const {
-  Isolate* isolate = GetIsolateForPtrCompr(*this);
+  const Isolate* isolate = GetIsolateForPtrCompr(*this);
   return Get(isolate, slot);
 }
 
-MaybeObject FeedbackVector::Get(Isolate* isolate, FeedbackSlot slot) const {
+MaybeObject FeedbackVector::Get(const Isolate* isolate,
+                                FeedbackSlot slot) const {
   return get(isolate, GetIndex(slot));
 }
 
 MaybeObject FeedbackVector::get(int index) const {
-  Isolate* isolate = GetIsolateForPtrCompr(*this);
+  const Isolate* isolate = GetIsolateForPtrCompr(*this);
   return get(isolate, index);
 }
 
-MaybeObject FeedbackVector::get(Isolate* isolate, int index) const {
+MaybeObject FeedbackVector::get(const Isolate* isolate, int index) const {
   DCHECK_LT(static_cast<unsigned>(index), static_cast<unsigned>(length()));
   int offset = OffsetOfElementAt(index);
   return RELAXED_READ_WEAK_FIELD(*this, offset);
@@ -231,32 +233,47 @@ BinaryOperationHint BinaryOperationHintFromFeedback(int type_feedback) {
 }
 
 // Helper function to transform the feedback to CompareOperationHint.
+template <CompareOperationFeedback::Type Feedback>
+bool Is(int type_feedback) {
+  return !(type_feedback & ~Feedback);
+}
+
 CompareOperationHint CompareOperationHintFromFeedback(int type_feedback) {
-  switch (type_feedback) {
-    case CompareOperationFeedback::kNone:
-      return CompareOperationHint::kNone;
-    case CompareOperationFeedback::kSignedSmall:
-      return CompareOperationHint::kSignedSmall;
-    case CompareOperationFeedback::kNumber:
-      return CompareOperationHint::kNumber;
-    case CompareOperationFeedback::kNumberOrOddball:
-      return CompareOperationHint::kNumberOrOddball;
-    case CompareOperationFeedback::kInternalizedString:
-      return CompareOperationHint::kInternalizedString;
-    case CompareOperationFeedback::kString:
-      return CompareOperationHint::kString;
-    case CompareOperationFeedback::kSymbol:
-      return CompareOperationHint::kSymbol;
-    case CompareOperationFeedback::kBigInt:
-      return CompareOperationHint::kBigInt;
-    case CompareOperationFeedback::kReceiver:
-      return CompareOperationHint::kReceiver;
-    case CompareOperationFeedback::kReceiverOrNullOrUndefined:
-      return CompareOperationHint::kReceiverOrNullOrUndefined;
-    default:
-      return CompareOperationHint::kAny;
+  if (Is<CompareOperationFeedback::kNone>(type_feedback)) {
+    return CompareOperationHint::kNone;
   }
-  UNREACHABLE();
+
+  if (Is<CompareOperationFeedback::kSignedSmall>(type_feedback)) {
+    return CompareOperationHint::kSignedSmall;
+  } else if (Is<CompareOperationFeedback::kNumber>(type_feedback)) {
+    return CompareOperationHint::kNumber;
+  } else if (Is<CompareOperationFeedback::kNumberOrBoolean>(type_feedback)) {
+    return CompareOperationHint::kNumberOrBoolean;
+  }
+
+  if (Is<CompareOperationFeedback::kInternalizedString>(type_feedback)) {
+    return CompareOperationHint::kInternalizedString;
+  } else if (Is<CompareOperationFeedback::kString>(type_feedback)) {
+    return CompareOperationHint::kString;
+  }
+
+  if (Is<CompareOperationFeedback::kReceiver>(type_feedback)) {
+    return CompareOperationHint::kReceiver;
+  } else if (Is<CompareOperationFeedback::kReceiverOrNullOrUndefined>(
+                 type_feedback)) {
+    return CompareOperationHint::kReceiverOrNullOrUndefined;
+  }
+
+  if (Is<CompareOperationFeedback::kBigInt>(type_feedback)) {
+    return CompareOperationHint::kBigInt;
+  }
+
+  if (Is<CompareOperationFeedback::kSymbol>(type_feedback)) {
+    return CompareOperationHint::kSymbol;
+  }
+
+  DCHECK(Is<CompareOperationFeedback::kAny>(type_feedback));
+  return CompareOperationHint::kAny;
 }
 
 // Helper function to transform the feedback to ForInHint.
@@ -284,10 +301,6 @@ Handle<Symbol> FeedbackVector::GenericSentinel(Isolate* isolate) {
 
 Handle<Symbol> FeedbackVector::MegamorphicSentinel(Isolate* isolate) {
   return isolate->factory()->megamorphic_symbol();
-}
-
-Handle<Symbol> FeedbackVector::PremonomorphicSentinel(Isolate* isolate) {
-  return isolate->factory()->premonomorphic_symbol();
 }
 
 Symbol FeedbackVector::RawUninitializedSentinel(Isolate* isolate) {

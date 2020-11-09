@@ -10,6 +10,7 @@
 #include "src/execution/runtime-profiler.h"
 #include "src/execution/simulator.h"
 #include "src/logging/counters.h"
+#include "src/objects/backing-store.h"
 #include "src/roots/roots-inl.h"
 #include "src/utils/memcopy.h"
 #include "src/wasm/wasm-engine.h"
@@ -86,6 +87,8 @@ void StackGuard::PushInterruptsScope(InterruptsScope* scope) {
       current->intercepted_flags_ &= ~scope->intercept_mask_;
     }
     thread_local_.interrupt_flags_ |= restored_flags;
+
+    if (has_pending_interrupts(access)) set_interrupt_limits(access);
   }
   if (!has_pending_interrupts(access)) reset_limits(access);
   // Add scope to the chain.
@@ -246,6 +249,10 @@ class ShouldBeZeroOnReturnScope final {
 Object StackGuard::HandleInterrupts() {
   TRACE_EVENT0("v8.execute", "V8.HandleInterrupts");
 
+#if DEBUG
+  isolate_->heap()->VerifyNewSpaceTop();
+#endif
+
   if (FLAG_verify_predictable) {
     // Advance synthetic time by making a time request.
     isolate_->heap()->MonotonicallyIncreasingTimeInMs();
@@ -269,10 +276,8 @@ Object StackGuard::HandleInterrupts() {
   }
 
   if (TestAndClear(&interrupt_flags, GROW_SHARED_MEMORY)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm"),
-                 "V8.WasmGrowSharedMemory");
-    isolate_->wasm_engine()->memory_tracker()->UpdateSharedMemoryInstances(
-        isolate_);
+    TRACE_EVENT0("v8.wasm", "V8.WasmGrowSharedMemory");
+    BackingStore::UpdateSharedWasmMemoryObjects(isolate_);
   }
 
   if (TestAndClear(&interrupt_flags, DEOPT_MARKED_ALLOCATION_SITES)) {
@@ -295,18 +300,16 @@ Object StackGuard::HandleInterrupts() {
   }
 
   if (TestAndClear(&interrupt_flags, LOG_WASM_CODE)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm"), "LogCode");
+    TRACE_EVENT0("v8.wasm", "V8.LogCode");
     isolate_->wasm_engine()->LogOutstandingCodesForIsolate(isolate_);
   }
 
   if (TestAndClear(&interrupt_flags, WASM_CODE_GC)) {
-    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.wasm"), "WasmCodeGC");
+    TRACE_EVENT0("v8.wasm", "V8.WasmCodeGC");
     isolate_->wasm_engine()->ReportLiveCodeFromStackForGC(isolate_);
   }
 
   isolate_->counters()->stack_interrupts()->Increment();
-  isolate_->counters()->runtime_profiler_ticks()->Increment();
-  isolate_->runtime_profiler()->MarkCandidatesForOptimization();
 
   return ReadOnlyRoots(isolate_).undefined_value();
 }

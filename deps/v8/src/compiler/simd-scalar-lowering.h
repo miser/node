@@ -85,6 +85,7 @@ class SimdScalarLowering {
   void SetLoweredType(Node* node, Node* output);
   void GetIndexNodes(Node* index, Node** new_indices, SimdType type);
   void LowerLoadOp(Node* node, SimdType type);
+  void LowerLoadTransformOp(Node* node, SimdType type);
   void LowerStoreOp(Node* node);
   void LowerBinaryOp(Node* node, SimdType input_rep_type, const Operator* op,
                      bool not_horizontal = true);
@@ -109,6 +110,7 @@ class SimdScalarLowering {
   Node* BuildF64Trunc(Node* input);
   void LowerNotEqual(Node* node, SimdType input_rep_type, const Operator* op);
   MachineType MachineTypeFrom(SimdType simdType);
+  void LowerBitMaskOp(Node* node, SimdType rep_type, int msb_index);
 
   MachineGraph* const mcgraph_;
   NodeMarker<State> state_;

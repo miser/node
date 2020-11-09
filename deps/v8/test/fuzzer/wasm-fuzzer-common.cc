@@ -32,39 +32,68 @@ void InterpretAndExecuteModule(i::Isolate* isolate,
   // start function can contain an infinite loop which we cannot handle.
   if (module_object->module()->start_function_index >= 0) return;
 
-  ErrorThrower thrower(isolate, "WebAssembly Instantiation");
-  MaybeHandle<WasmInstanceObject> maybe_instance;
+  HandleScope handle_scope(isolate);  // Avoid leaking handles.
   Handle<WasmInstanceObject> instance;
 
-  // Try to instantiate and interpret the module_object.
-  maybe_instance = isolate->wasm_engine()->SyncInstantiate(
-      isolate, &thrower, module_object,
-      Handle<JSReceiver>::null(),     // imports
-      MaybeHandle<JSArrayBuffer>());  // memory
-  if (!maybe_instance.ToHandle(&instance)) {
-    isolate->clear_pending_exception();
-    thrower.Reset();  // Ignore errors.
-    return;
+  // Try to instantiate, return if it fails.
+  {
+    ErrorThrower thrower(isolate, "WebAssembly Instantiation");
+    if (!isolate->wasm_engine()
+             ->SyncInstantiate(isolate, &thrower, module_object, {},
+                               {})  // no imports & memory
+             .ToHandle(&instance)) {
+      isolate->clear_pending_exception();
+      thrower.Reset();  // Ignore errors.
+      return;
+    }
   }
-  if (!testing::InterpretWasmModuleForTesting(isolate, instance, "main", 0,
-                                              nullptr)) {
-    isolate->clear_pending_exception();
+
+  // Get the "main" exported function. Do nothing if it does not exist.
+  Handle<WasmExportedFunction> main_function;
+  if (!testing::GetExportedFunction(isolate, instance, "main")
+           .ToHandle(&main_function)) {
     return;
   }
 
+  std::unique_ptr<WasmValue[]> arguments =
+      testing::MakeDefaultArguments(isolate, main_function->sig());
+
+  // Now interpret.
+  testing::WasmInterpretationResult interpreter_result =
+      testing::InterpretWasmModule(
+          isolate, instance, main_function->function_index(), arguments.get());
+  if (interpreter_result.failed()) return;
+
+  // The WebAssembly spec allows the sign bit of NaN to be non-deterministic.
+  // This sign bit can make the difference between an infinite loop and
+  // terminating code. With possible non-determinism we cannot guarantee that
+  // the generated code will not go into an infinite loop and cause a timeout in
+  // Clusterfuzz. Therefore we do not execute the generated code if the result
+  // may be non-deterministic.
+  if (interpreter_result.possible_nondeterminism()) return;
+
   // Try to instantiate and execute the module_object.
-  maybe_instance = isolate->wasm_engine()->SyncInstantiate(
-      isolate, &thrower, module_object,
-      Handle<JSReceiver>::null(),     // imports
-      MaybeHandle<JSArrayBuffer>());  // memory
-  if (!maybe_instance.ToHandle(&instance)) {
-    isolate->clear_pending_exception();
-    thrower.Reset();  // Ignore errors.
-    return;
+  {
+    ErrorThrower thrower(isolate, "Second Instantiation");
+    // We instantiated before, so the second instantiation must also succeed:
+    CHECK(isolate->wasm_engine()
+              ->SyncInstantiate(isolate, &thrower, module_object, {},
+                                {})  // no imports & memory
+              .ToHandle(&instance));
   }
-  if (testing::RunWasmModuleForTesting(isolate, instance, 0, nullptr) < 0) {
-    isolate->clear_pending_exception();
-    return;
+
+  bool exception = false;
+  int32_t result_compiled = testing::CallWasmFunctionForTesting(
+      isolate, instance, "main", 0, nullptr, &exception);
+  if (interpreter_result.trapped() != exception) {
+    const char* exception_text[] = {"no exception", "exception"};
+    FATAL("interpreter: %s; compiled: %s",
+          exception_text[interpreter_result.trapped()],
+          exception_text[exception]);
+  }
+
+  if (interpreter_result.finished()) {
+    CHECK_EQ(interpreter_result.result(), result_compiled);
   }
 }
 
@@ -80,21 +109,26 @@ PrintSig PrintReturns(const FunctionSig* sig) {
   return {sig->return_count(), [=](size_t i) { return sig->GetReturn(i); }};
 }
 const char* ValueTypeToConstantName(ValueType type) {
-  switch (type) {
-    case kWasmI32:
+  switch (type.kind()) {
+    case ValueType::kI32:
       return "kWasmI32";
-    case kWasmI64:
+    case ValueType::kI64:
       return "kWasmI64";
-    case kWasmF32:
+    case ValueType::kF32:
       return "kWasmF32";
-    case kWasmF64:
+    case ValueType::kF64:
       return "kWasmF64";
-    case kWasmAnyRef:
-      return "kWasmAnyRef";
-    case kWasmFuncRef:
-      return "kWasmFuncRef";
-    case kWasmExnRef:
-      return "kWasmExnRef";
+    case ValueType::kOptRef:
+      switch (type.heap_representation()) {
+        case HeapType::kExtern:
+          return "kWasmExternRef";
+        case HeapType::kFunc:
+          return "kWasmFuncRef";
+        case HeapType::kExn:
+          return "kWasmExnRef";
+        default:
+          UNREACHABLE();
+      }
     default:
       UNREACHABLE();
   }
@@ -120,11 +154,12 @@ std::ostream& operator<<(std::ostream& os, const PrintName& name) {
 void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
                       bool compiles) {
   constexpr bool kVerifyFunctions = false;
-  auto enabled_features = i::wasm::WasmFeaturesFromIsolate(isolate);
+  auto enabled_features = i::wasm::WasmFeatures::FromIsolate(isolate);
   ModuleResult module_res = DecodeWasmModule(
       enabled_features, wire_bytes.start(), wire_bytes.end(), kVerifyFunctions,
       ModuleOrigin::kWasmOrigin, isolate->counters(),
-      isolate->wasm_engine()->allocator());
+      isolate->metrics_recorder(), v8::metrics::Recorder::ContextId::Empty(),
+      DecodingMethod::kSync, isolate->wasm_engine()->allocator());
   CHECK(module_res.ok());
   WasmModule* module = module_res.value().get();
   CHECK_NOT_NULL(module);
@@ -151,11 +186,10 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
         "\n"
         "load('test/mjsunit/wasm/wasm-module-builder.js');\n"
         "\n"
-        "(function() {\n"
-        "  const builder = new WasmModuleBuilder();\n";
+        "const builder = new WasmModuleBuilder();\n";
 
   if (module->has_memory) {
-    os << "  builder.addMemory(" << module->initial_pages;
+    os << "builder.addMemory(" << module->initial_pages;
     if (module->has_maximum_pages) {
       os << ", " << module->maximum_pages;
     } else {
@@ -169,12 +203,19 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
   }
 
   for (WasmGlobal& glob : module->globals) {
-    os << "  builder.addGlobal(" << ValueTypeToConstantName(glob.type) << ", "
+    os << "builder.addGlobal(" << ValueTypeToConstantName(glob.type) << ", "
        << glob.mutability << ");\n";
   }
 
-  for (const FunctionSig* sig : module->signatures) {
-    os << "  builder.addType(makeSig(" << PrintParameters(sig) << ", "
+  // TODO(7748): Support array/struct types.
+#if DEBUG
+  for (uint8_t kind : module->type_kinds) {
+    DCHECK_EQ(kWasmFunctionTypeCode, kind);
+  }
+#endif
+  for (TypeDefinition type : module->types) {
+    const FunctionSig* sig = type.function_sig;
+    os << "builder.addType(makeSig(" << PrintParameters(sig) << ", "
        << PrintReturns(sig) << "));\n";
   }
 
@@ -183,7 +224,7 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
   // There currently cannot be more than one table.
   DCHECK_GE(1, module->tables.size());
   for (const WasmTable& table : module->tables) {
-    os << "  builder.setTableBounds(" << table.initial_size << ", ";
+    os << "builder.setTableBounds(" << table.initial_size << ", ";
     if (table.has_maximum_size) {
       os << table.maximum_size << ");\n";
     } else {
@@ -191,13 +232,14 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
     }
   }
   for (const WasmElemSegment& elem_segment : module->elem_segments) {
-    os << "  builder.addElementSegment(";
-    switch (elem_segment.offset.kind) {
-      case WasmInitExpr::kGlobalIndex:
-        os << elem_segment.offset.val.global_index << ", true";
+    os << "builder.addElementSegment(";
+    os << elem_segment.table_index << ", ";
+    switch (elem_segment.offset.kind()) {
+      case WasmInitExpr::kGlobalGet:
+        os << elem_segment.offset.immediate().index << ", true";
         break;
       case WasmInitExpr::kI32Const:
-        os << elem_segment.offset.val.i32_const << ", false";
+        os << elem_segment.offset.immediate().i32_const << ", false";
         break;
       default:
         UNREACHABLE();
@@ -207,11 +249,11 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
 
   for (const WasmFunction& func : module->functions) {
     Vector<const uint8_t> func_code = wire_bytes.GetFunctionBytes(&func);
-    os << "  // Generate function " << (func.func_index + 1) << " (out of "
+    os << "// Generate function " << (func.func_index + 1) << " (out of "
        << module->functions.size() << ").\n";
 
     // Add function.
-    os << "  builder.addFunction(undefined, " << func.sig_index
+    os << "builder.addFunction(undefined, " << func.sig_index
        << " /* sig */)\n";
 
     // Add locals.
@@ -219,41 +261,39 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
     DecodeLocalDecls(enabled_features, &decls, func_code.begin(),
                      func_code.end());
     if (!decls.type_list.empty()) {
-      os << "    ";
+      os << "  ";
       for (size_t pos = 0, count = 1, locals = decls.type_list.size();
            pos < locals; pos += count, count = 1) {
         ValueType type = decls.type_list[pos];
         while (pos + count < locals && decls.type_list[pos + count] == type)
           ++count;
-        os << ".addLocals({" << ValueTypes::TypeName(type)
-           << "_count: " << count << "})";
+        os << ".addLocals({" << type.name() << "_count: " << count << "})";
       }
       os << "\n";
     }
 
     // Add body.
-    os << "    .addBodyWithEnd([\n";
+    os << "  .addBodyWithEnd([\n";
 
     FunctionBody func_body(func.sig, func.code.offset(), func_code.begin(),
                            func_code.end());
     PrintRawWasmCode(isolate->allocator(), func_body, module, kOmitLocals);
-    os << "            ]);\n";
+    os << "]);\n";
   }
 
   for (WasmExport& exp : module->export_table) {
     if (exp.kind != kExternalFunction) continue;
-    os << "  builder.addExport('" << PrintName(wire_bytes, exp.name) << "', "
+    os << "builder.addExport('" << PrintName(wire_bytes, exp.name) << "', "
        << exp.index << ");\n";
   }
 
   if (compiles) {
-    os << "  const instance = builder.instantiate();\n"
-          "  print(instance.exports.main(1, 2, 3));\n";
+    os << "const instance = builder.instantiate();\n"
+          "print(instance.exports.main(1, 2, 3));\n";
   } else {
-    os << "  assertThrows(function() { builder.instantiate(); }, "
+    os << "assertThrows(function() { builder.instantiate(); }, "
           "WebAssembly.CompileError);\n";
   }
-  os << "})();\n";
 }
 
 void WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
@@ -265,6 +305,12 @@ void WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
   FlagScope<bool> enable_##feat(&FLAG_experimental_wasm_##feat, true);
   FOREACH_WASM_STAGING_FEATURE_FLAG(ENABLE_STAGED_FEATURES)
 #undef ENABLE_STAGED_FEATURES
+  // SIMD is not included in staging yet, so we enable it here for fuzzing.
+  EXPERIMENTAL_FLAG_SCOPE(simd);
+  // TODO(v8:10308): Bitmask was merged into proposal after 84 cut, so it was
+  // left gated by this flag. In order to fuzz it, we need this flag. This
+  // should be removed once we move bitmask out of post mvp.
+  FLAG_SCOPE(wasm_simd_post_mvp);
 
   // Strictly enforce the input size limit. Note that setting "max_len" on the
   // fuzzer target is not enough, since different fuzzers are used and not all
@@ -305,8 +351,7 @@ void WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
   ErrorThrower interpreter_thrower(i_isolate, "Interpreter");
   ModuleWireBytes wire_bytes(buffer.begin(), buffer.end());
 
-  // Compile with Turbofan here. Liftoff will be tested later.
-  auto enabled_features = i::wasm::WasmFeaturesFromIsolate(i_isolate);
+  auto enabled_features = i::wasm::WasmFeatures::FromIsolate(i_isolate);
   MaybeHandle<WasmModuleObject> compiled_module;
   {
     // Explicitly enable Liftoff, disable tiering and set the tier_mask. This
@@ -331,58 +376,7 @@ void WasmExecutionFuzzer::FuzzWasmModule(Vector<const uint8_t> data,
 
   if (!compiles) return;
 
-  MaybeHandle<WasmInstanceObject> interpreter_instance =
-      i_isolate->wasm_engine()->SyncInstantiate(
-          i_isolate, &interpreter_thrower, compiled_module.ToHandleChecked(),
-          MaybeHandle<JSReceiver>(), MaybeHandle<JSArrayBuffer>());
-
-  // Ignore instantiation failure.
-  if (interpreter_thrower.error()) return;
-
-  testing::WasmInterpretationResult interpreter_result =
-      testing::InterpretWasmModule(i_isolate,
-                                   interpreter_instance.ToHandleChecked(), 0,
-                                   interpreter_args.get());
-
-  // Do not execute the generated code if the interpreter did not finished after
-  // a bounded number of steps.
-  if (interpreter_result.stopped()) return;
-
-  // The WebAssembly spec allows the sign bit of NaN to be non-deterministic.
-  // This sign bit can make the difference between an infinite loop and
-  // terminating code. With possible non-determinism we cannot guarantee that
-  // the generated code will not go into an infinite loop and cause a timeout in
-  // Clusterfuzz. Therefore we do not execute the generated code if the result
-  // may be non-deterministic.
-  if (interpreter_result.possible_nondeterminism()) return;
-
-  int32_t result_compiled;
-  {
-    ErrorThrower compiler_thrower(i_isolate, "Compile");
-    MaybeHandle<WasmInstanceObject> compiled_instance =
-        i_isolate->wasm_engine()->SyncInstantiate(
-            i_isolate, &compiler_thrower, compiled_module.ToHandleChecked(),
-            MaybeHandle<JSReceiver>(), MaybeHandle<JSArrayBuffer>());
-
-    DCHECK(!compiler_thrower.error());
-    result_compiled = testing::CallWasmFunctionForTesting(
-        i_isolate, compiled_instance.ToHandleChecked(), &compiler_thrower,
-        "main", num_args, compiler_args.get());
-  }
-
-  if (interpreter_result.trapped() != i_isolate->has_pending_exception()) {
-    const char* exception_text[] = {"no exception", "exception"};
-    FATAL("interpreter: %s; compiled: %s",
-          exception_text[interpreter_result.trapped()],
-          exception_text[i_isolate->has_pending_exception()]);
-  }
-
-  if (!interpreter_result.trapped()) {
-    CHECK_EQ(interpreter_result.result(), result_compiled);
-  }
-
-  // Cleanup any pending exception.
-  i_isolate->clear_pending_exception();
+  InterpretAndExecuteModule(i_isolate, compiled_module.ToHandleChecked());
 }
 
 }  // namespace fuzzer

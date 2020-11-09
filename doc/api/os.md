@@ -4,6 +4,8 @@
 
 > Stability: 2 - Stable
 
+<!-- source_link=lib/os.js -->
+
 The `os` module provides operating system-related utility methods and
 properties. It can be accessed using:
 
@@ -11,7 +13,7 @@ properties. It can be accessed using:
 const os = require('os');
 ```
 
-## os.EOL
+## `os.EOL`
 <!-- YAML
 added: v0.7.8
 -->
@@ -23,7 +25,7 @@ The operating system-specific end-of-line marker.
 * `\n` on POSIX
 * `\r\n` on Windows
 
-## os.arch()
+## `os.arch()`
 <!-- YAML
 added: v0.5.0
 -->
@@ -36,7 +38,7 @@ compiled. Possible values are `'arm'`, `'arm64'`, `'ia32'`, `'mips'`,
 
 The return value is equivalent to [`process.arch`][].
 
-## os.constants
+## `os.constants`
 <!-- YAML
 added: v6.3.0
 -->
@@ -45,9 +47,9 @@ added: v6.3.0
 
 Contains commonly used operating system-specific constants for error codes,
 process signals, and so on. The specific constants defined are described in
-[OS Constants](#os_os_constants_1).
+[OS constants](#os_os_constants_1).
 
-## os.cpus()
+## `os.cpus()`
 <!-- YAML
 added: v0.3.3
 -->
@@ -120,7 +122,7 @@ The properties included on each object include:
 `nice` values are POSIX-only. On Windows, the `nice` values of all processors
 are always 0.
 
-## os.endianness()
+## `os.endianness()`
 <!-- YAML
 added: v0.9.4
 -->
@@ -132,7 +134,7 @@ binary was compiled.
 
 Possible values are `'BE'` for big endian and `'LE'` for little endian.
 
-## os.freemem()
+## `os.freemem()`
 <!-- YAML
 added: v0.3.3
 -->
@@ -141,7 +143,7 @@ added: v0.3.3
 
 Returns the amount of free system memory in bytes as an integer.
 
-## os.getPriority(\[pid\])
+## `os.getPriority([pid])`
 <!-- YAML
 added: v10.10.0
 -->
@@ -153,7 +155,7 @@ added: v10.10.0
 Returns the scheduling priority for the process specified by `pid`. If `pid` is
 not provided or is `0`, the priority of the current process is returned.
 
-## os.homedir()
+## `os.homedir()`
 <!-- YAML
 added: v2.3.0
 -->
@@ -168,16 +170,16 @@ uses the [effective UID][EUID] to look up the user's home directory.
 On Windows, it uses the `USERPROFILE` environment variable if defined.
 Otherwise it uses the path to the profile directory of the current user.
 
-## os.hostname()
+## `os.hostname()`
 <!-- YAML
 added: v0.3.3
 -->
 
 * Returns: {string}
 
-Returns the hostname of the operating system as a string.
+Returns the host name of the operating system as a string.
 
-## os.loadavg()
+## `os.loadavg()`
 <!-- YAML
 added: v0.3.3
 -->
@@ -192,7 +194,7 @@ system and expressed as a fractional number.
 The load average is a Unix-specific concept. On Windows, the return value is
 always `[0, 0, 0]`.
 
-## os.networkInterfaces()
+## `os.networkInterfaces()`
 <!-- YAML
 added: v0.6.0
 -->
@@ -263,7 +265,7 @@ The properties available on the assigned network address object include:
 }
 ```
 
-## os.platform()
+## `os.platform()`
 <!-- YAML
 added: v0.5.0
 -->
@@ -279,7 +281,7 @@ The return value is equivalent to [`process.platform`][].
 The value `'android'` may also be returned if Node.js is built on the Android
 operating system. [Android support is experimental][Android building].
 
-## os.release()
+## `os.release()`
 <!-- YAML
 added: v0.3.3
 -->
@@ -289,10 +291,10 @@ added: v0.3.3
 Returns the operating system as a string.
 
 On POSIX systems, the operating system release is determined by calling
-[uname(3)][]. On Windows, `GetVersionExW()` is used. See
-https://en.wikipedia.org/wiki/Uname#Examples for more information.
+[`uname(3)`][]. On Windows, `GetVersionExW()` is used. See
+<https://en.wikipedia.org/wiki/Uname#Examples> for more information.
 
-## os.setPriority(\[pid, \]priority)
+## `os.setPriority([pid, ]priority)`
 <!-- YAML
 added: v10.10.0
 -->
@@ -315,14 +317,14 @@ On Windows, setting priority to `PRIORITY_HIGHEST` requires elevated user
 privileges. Otherwise the set priority will be silently reduced to
 `PRIORITY_HIGH`.
 
-## os.tmpdir()
+## `os.tmpdir()`
 <!-- YAML
 added: v0.9.9
 changes:
   - version: v2.0.0
     pr-url: https://github.com/nodejs/node/pull/747
     description: This function is now cross-platform consistent and no longer
-                 returns a path with a trailing slash on any platform
+                 returns a path with a trailing slash on any platform.
 -->
 
 * Returns: {string}
@@ -330,7 +332,7 @@ changes:
 Returns the operating system's default directory for temporary files as a
 string.
 
-## os.totalmem()
+## `os.totalmem()`
 <!-- YAML
 added: v0.3.3
 -->
@@ -339,20 +341,20 @@ added: v0.3.3
 
 Returns the total amount of system memory in bytes as an integer.
 
-## os.type()
+## `os.type()`
 <!-- YAML
 added: v0.3.3
 -->
 
 * Returns: {string}
 
-Returns the operating system name as returned by [uname(3)][]. For example, it
+Returns the operating system name as returned by [`uname(3)`][]. For example, it
 returns `'Linux'` on Linux, `'Darwin'` on macOS, and `'Windows_NT'` on Windows.
 
-See https://en.wikipedia.org/wiki/Uname#Examples for additional information
-about the output of running [uname(3)][] on various operating systems.
+See <https://en.wikipedia.org/wiki/Uname#Examples> for additional information
+about the output of running [`uname(3)`][] on various operating systems.
 
-## os.uptime()
+## `os.uptime()`
 <!-- YAML
 added: v0.3.3
 changes:
@@ -366,7 +368,7 @@ changes:
 
 Returns the system uptime in number of seconds.
 
-## os.userInfo(\[options\])
+## `os.userInfo([options])`
 <!-- YAML
 added: v6.0.0
 -->
@@ -389,13 +391,29 @@ operating system response.
 
 Throws a [`SystemError`][] if a user has no `username` or `homedir`.
 
-## OS Constants
+## `os.version()`
+<!-- YAML
+added:
+ - v13.11.0
+ - v12.17.0
+-->
+
+* Returns {string}
+
+Returns a string identifying the kernel version.
+
+On POSIX systems, the operating system release is determined by calling
+[`uname(3)`][]. On Windows, `RtlGetVersion()` is used, and if it is not
+available, `GetVersionExW()` will be used. See
+<https://en.wikipedia.org/wiki/Uname#Examples> for more information.
+
+## OS constants
 
 The following constants are exported by `os.constants`.
 
 Not all constants will be available on every operating system.
 
-### Signal Constants
+### Signal constants
 <!-- YAML
 changes:
   - version: v5.11.0
@@ -418,7 +436,7 @@ The following signal constants are exported by `os.constants.signals`.
   <tr>
     <td><code>SIGINT</code></td>
     <td>Sent to indicate when a user wishes to interrupt a process
-    (<code>(Ctrl+C)</code>).</td>
+    (<kbd>Ctrl</kbd>+<kbd>C</kbd>).</td>
   </tr>
   <tr>
     <td><code>SIGQUIT</code></td>
@@ -566,11 +584,11 @@ The following signal constants are exported by `os.constants.signals`.
   </tr>
 </table>
 
-### Error Constants
+### Error constants
 
 The following error constants are exported by `os.constants.errno`.
 
-#### POSIX Error Constants
+#### POSIX error constants
 
 <table>
   <tr>
@@ -902,7 +920,7 @@ The following error constants are exported by `os.constants.errno`.
   </tr>
 </table>
 
-#### Windows Specific Error Constants
+#### Windows-specific error constants
 
 The following error codes are specific to the Windows operating system.
 
@@ -1147,7 +1165,7 @@ The following error codes are specific to the Windows operating system.
   </tr>
 </table>
 
-### dlopen Constants
+### dlopen constants
 
 If available on the operating system, the following constants
 are exported in `os.constants.dlopen`. See dlopen(3) for detailed
@@ -1184,7 +1202,7 @@ information.
   </tr>
 </table>
 
-### Priority Constants
+### Priority constants
 <!-- YAML
 added: v10.10.0
 -->
@@ -1238,7 +1256,7 @@ The following process scheduling constants are exported by
   </tr>
 </table>
 
-### libuv Constants
+### libuv constants
 
 <table>
   <tr>
@@ -1251,9 +1269,9 @@ The following process scheduling constants are exported by
   </tr>
 </table>
 
-[`SystemError`]: errors.html#errors_class_systemerror
-[`process.arch`]: process.html#process_process_arch
-[`process.platform`]: process.html#process_process_platform
 [Android building]: https://github.com/nodejs/node/blob/master/BUILDING.md#androidandroid-based-devices-eg-firefox-os
 [EUID]: https://en.wikipedia.org/wiki/User_identifier#Effective_user_ID
-[uname(3)]: https://linux.die.net/man/3/uname
+[`SystemError`]: errors.md#errors_class_systemerror
+[`process.arch`]: process.md#process_process_arch
+[`process.platform`]: process.md#process_process_platform
+[`uname(3)`]: https://linux.die.net/man/3/uname

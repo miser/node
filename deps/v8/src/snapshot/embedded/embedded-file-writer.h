@@ -8,6 +8,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 #include "src/common/globals.h"
 #include "src/snapshot/embedded/embedded-data.h"
@@ -120,6 +121,11 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   }
 
   void WriteExternalFilenames(PlatformEmbeddedFileWriterBase* w) const {
+#ifndef DEBUG
+    // Release builds must not contain debug infos.
+    CHECK_EQ(external_filenames_by_index_.size(), 0);
+#endif
+
     w->Comment(
         "Source positions in the embedded blob refer to filenames by id.");
     w->Comment("Assembly directives here map the id to a filename.");
@@ -136,23 +142,31 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
   // Fairly arbitrary but should fit all symbol names.
   static constexpr int kTemporaryStringLength = 256;
 
-  std::string EmbeddedBlobDataSymbol() const {
-    i::EmbeddedVector<char, kTemporaryStringLength> embedded_blob_data_symbol;
-    i::SNPrintF(embedded_blob_data_symbol, "v8_%s_embedded_blob_data_",
-                embedded_variant_);
-    return std::string{embedded_blob_data_symbol.begin()};
+  std::string EmbeddedBlobCodeDataSymbol() const {
+    i::EmbeddedVector<char, kTemporaryStringLength>
+        embedded_blob_code_data_symbol;
+    i::SNPrintF(embedded_blob_code_data_symbol,
+                "v8_%s_embedded_blob_code_data_", embedded_variant_);
+    return std::string{embedded_blob_code_data_symbol.begin()};
+  }
+
+  std::string EmbeddedBlobMetadataDataSymbol() const {
+    i::EmbeddedVector<char, kTemporaryStringLength>
+        embedded_blob_metadata_data_symbol;
+    i::SNPrintF(embedded_blob_metadata_data_symbol,
+                "v8_%s_embedded_blob_metadata_data_", embedded_variant_);
+    return std::string{embedded_blob_metadata_data_symbol.begin()};
   }
 
   void WriteMetadataSection(PlatformEmbeddedFileWriterBase* w,
                             const i::EmbeddedData* blob) const {
-    w->Comment("The embedded blob starts here. Metadata comes first, followed");
-    w->Comment("by builtin instruction streams.");
-    w->SectionText();
-    w->AlignToCodeAlignment();
-    w->DeclareLabel(EmbeddedBlobDataSymbol().c_str());
+    w->Comment("The embedded blob metadata starts here.");
+    w->SectionRoData();
+    w->AlignToDataAlignment();
+    w->DeclareLabel(EmbeddedBlobMetadataDataSymbol().c_str());
 
-    WriteBinaryContentsAsInlineAssembly(w, blob->data(),
-                                        i::EmbeddedData::RawDataOffset());
+    WriteBinaryContentsAsInlineAssembly(w, blob->metadata(),
+                                        blob->metadata_size());
   }
 
   void WriteBuiltin(PlatformEmbeddedFileWriterBase* w,
@@ -160,6 +174,12 @@ class EmbeddedFileWriter : public EmbeddedFileWriterInterface {
 
   void WriteInstructionStreams(PlatformEmbeddedFileWriterBase* w,
                                const i::EmbeddedData* blob) const {
+    w->Comment("The embedded blob data starts here. It contains the builtin");
+    w->Comment("instruction streams.");
+    w->SectionText();
+    w->AlignToCodeAlignment();
+    w->DeclareLabel(EmbeddedBlobCodeDataSymbol().c_str());
+
     for (int i = 0; i < i::Builtins::builtin_count; i++) {
       if (!blob->ContainsBuiltin(i)) continue;
 

@@ -273,6 +273,11 @@ class SparseInputMask final {
     // current sparse input is real.
     Node* GetReal() const;
 
+    // Advance to the next real value or the end. Only valid if the iterator is
+    // not dense. Returns the number of empty values that were skipped. This can
+    // return 0 and in that case, it does not advance.
+    size_t AdvanceToNextRealOrEnd();
+
     // Get the current sparse input, returning either a real input node if
     // the current sparse input is real, or the given {empty_value} if the
     // current sparse input is empty.
@@ -444,6 +449,8 @@ V8_EXPORT_PRIVATE Handle<HeapObject> HeapConstantOf(const Operator* op)
 const StringConstantBase* StringConstantBaseOf(const Operator* op)
     V8_WARN_UNUSED_RESULT;
 
+const char* StaticAssertSourceOf(const Operator* op);
+
 // Interface for building common operators that can be used at any level of IR,
 // including JavaScript, mid-level, and low-level.
 class V8_EXPORT_PRIVATE CommonOperatorBuilder final
@@ -454,7 +461,7 @@ class V8_EXPORT_PRIVATE CommonOperatorBuilder final
   const Operator* Dead();
   const Operator* DeadValue(MachineRepresentation rep);
   const Operator* Unreachable();
-  const Operator* StaticAssert();
+  const Operator* StaticAssert(const char* source);
   const Operator* End(size_t control_input_count);
   const Operator* Branch(BranchHint = BranchHint::kNone,
                          IsSafetyCheck = IsSafetyCheck::kSafetyCheck);
@@ -487,12 +494,11 @@ class V8_EXPORT_PRIVATE CommonOperatorBuilder final
   const Operator* Merge(int control_input_count);
   const Operator* Parameter(int index, const char* debug_name = nullptr);
 
-  const Operator* OsrNormalEntry();
-  const Operator* OsrLoopEntry();
   const Operator* OsrValue(int index);
 
   const Operator* Int32Constant(int32_t);
   const Operator* Int64Constant(int64_t);
+  const Operator* TaggedIndexConstant(int32_t value);
   const Operator* Float32Constant(volatile float);
   const Operator* Float64Constant(volatile double);
   const Operator* ExternalConstant(const ExternalReference&);
@@ -522,7 +528,7 @@ class V8_EXPORT_PRIVATE CommonOperatorBuilder final
   const Operator* TypedStateValues(const ZoneVector<MachineType>* types,
                                    SparseInputMask bitmask);
   const Operator* ArgumentsElementsState(ArgumentsStateType type);
-  const Operator* ArgumentsLengthState(ArgumentsStateType type);
+  const Operator* ArgumentsLengthState();
   const Operator* ObjectState(uint32_t object_id, int pointer_slots);
   const Operator* TypedObjectState(uint32_t object_id,
                                    const ZoneVector<MachineType>* types);
@@ -534,6 +540,7 @@ class V8_EXPORT_PRIVATE CommonOperatorBuilder final
   const Operator* Projection(size_t index);
   const Operator* Retain();
   const Operator* TypeGuard(Type type);
+  const Operator* FoldConstant();
 
   // Constructs a new merge or phi operator with the same opcode as {op}, but
   // with {size} inputs.

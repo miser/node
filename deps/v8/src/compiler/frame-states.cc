@@ -16,6 +16,11 @@ namespace v8 {
 namespace internal {
 namespace compiler {
 
+// Guard equality of these constants. Ideally they should be merged at
+// some point.
+STATIC_ASSERT(kFrameStateOuterStateInput ==
+              FrameState::kFrameStateOuterStateInput);
+
 size_t hash_value(OutputFrameStateCombine const& sc) {
   return base::hash_value(sc.parameter_);
 }
@@ -101,7 +106,7 @@ uint8_t DeoptimizerParameterCountFor(ContinuationFrameStateMode mode) {
   UNREACHABLE();
 }
 
-Node* CreateBuiltinContinuationFrameStateCommon(
+FrameState CreateBuiltinContinuationFrameStateCommon(
     JSGraph* jsgraph, FrameStateType frame_type, Builtins::Name name,
     Node* closure, Node* context, Node** parameters, int parameter_count,
     Node* outer_frame_state,
@@ -119,14 +124,14 @@ Node* CreateBuiltinContinuationFrameStateCommon(
                                            shared);
   const Operator* op = common->FrameState(
       bailout_id, OutputFrameStateCombine::Ignore(), state_info);
-  return graph->NewNode(op, params_node, jsgraph->EmptyStateValues(),
-                        jsgraph->EmptyStateValues(), context, closure,
-                        outer_frame_state);
+  return FrameState(graph->NewNode(op, params_node, jsgraph->EmptyStateValues(),
+                                   jsgraph->EmptyStateValues(), context,
+                                   closure, outer_frame_state));
 }
 
 }  // namespace
 
-Node* CreateStubBuiltinContinuationFrameState(
+FrameState CreateStubBuiltinContinuationFrameState(
     JSGraph* jsgraph, Builtins::Name name, Node* context,
     Node* const* parameters, int parameter_count, Node* outer_frame_state,
     ContinuationFrameStateMode mode) {
@@ -137,13 +142,17 @@ Node* CreateStubBuiltinContinuationFrameState(
   // Stack parameters first. Depending on {mode}, final parameters are added
   // by the deoptimizer and aren't explicitly passed in the frame state.
   int stack_parameter_count =
-      descriptor.GetParameterCount() - DeoptimizerParameterCountFor(mode);
-  // Reserving space in the vector, except for the case where
-  // stack_parameter_count is -1.
-  actual_parameters.reserve(stack_parameter_count >= 0
-                                ? stack_parameter_count +
-                                      descriptor.GetRegisterParameterCount()
-                                : 0);
+      descriptor.GetStackParameterCount() - DeoptimizerParameterCountFor(mode);
+
+  // Ensure the parameters added by the deoptimizer are passed on the stack.
+  // This check prevents using TFS builtins as continuations while doing the
+  // lazy deopt. Use TFC or TFJ builtin as a lazy deopt continuation which
+  // would pass the result parameter on the stack.
+  DCHECK_GE(stack_parameter_count, 0);
+
+  // Reserving space in the vector.
+  actual_parameters.reserve(stack_parameter_count +
+                            descriptor.GetRegisterParameterCount());
   for (int i = 0; i < stack_parameter_count; ++i) {
     actual_parameters.push_back(
         parameters[descriptor.GetRegisterParameterCount() + i]);
@@ -160,7 +169,7 @@ Node* CreateStubBuiltinContinuationFrameState(
       static_cast<int>(actual_parameters.size()), outer_frame_state);
 }
 
-Node* CreateJavaScriptBuiltinContinuationFrameState(
+FrameState CreateJavaScriptBuiltinContinuationFrameState(
     JSGraph* jsgraph, const SharedFunctionInfoRef& shared, Builtins::Name name,
     Node* target, Node* context, Node* const* stack_parameters,
     int stack_parameter_count, Node* outer_frame_state,
@@ -198,7 +207,7 @@ Node* CreateJavaScriptBuiltinContinuationFrameState(
       shared.object());
 }
 
-Node* CreateGenericLazyDeoptContinuationFrameState(
+FrameState CreateGenericLazyDeoptContinuationFrameState(
     JSGraph* graph, const SharedFunctionInfoRef& shared, Node* target,
     Node* context, Node* receiver, Node* outer_frame_state) {
   Node* stack_parameters[]{receiver};

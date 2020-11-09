@@ -6,6 +6,7 @@
 #define V8_OBJECTS_JS_REGEXP_H_
 
 #include "src/objects/js-array.h"
+#include "torque-generated/bit-fields-tq.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -35,41 +36,20 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
   // NOT_COMPILED: Initial value. No data has been stored in the JSRegExp yet.
   // ATOM: A simple string to match against using an indexOf operation.
   // IRREGEXP: Compiled with Irregexp.
-  enum Type { NOT_COMPILED, ATOM, IRREGEXP };
-  struct FlagShiftBit {
-    static constexpr int kGlobal = 0;
-    static constexpr int kIgnoreCase = 1;
-    static constexpr int kMultiline = 2;
-    static constexpr int kSticky = 3;
-    static constexpr int kUnicode = 4;
-    static constexpr int kDotAll = 5;
-    static constexpr int kInvalid = 6;
-  };
-  enum Flag : uint8_t {
-    kNone = 0,
-    kGlobal = 1 << FlagShiftBit::kGlobal,
-    kIgnoreCase = 1 << FlagShiftBit::kIgnoreCase,
-    kMultiline = 1 << FlagShiftBit::kMultiline,
-    kSticky = 1 << FlagShiftBit::kSticky,
-    kUnicode = 1 << FlagShiftBit::kUnicode,
-    kDotAll = 1 << FlagShiftBit::kDotAll,
-    // Update FlagCount when adding new flags.
-    kInvalid = 1 << FlagShiftBit::kInvalid,  // Not included in FlagCount.
-  };
-  using Flags = base::Flags<Flag>;
+  // EXPERIMENTAL: Compiled to use the new linear time engine.
+  enum Type { NOT_COMPILED, ATOM, IRREGEXP, EXPERIMENTAL };
+  DEFINE_TORQUE_GENERATED_JS_REG_EXP_FLAGS()
 
-  static constexpr int kFlagCount = 6;
-
-  static constexpr Flag FlagFromChar(char c) {
+  static constexpr base::Optional<Flag> FlagFromChar(char c) {
     STATIC_ASSERT(kFlagCount == 6);
     // clang-format off
-    return c == 'g' ? kGlobal
-         : c == 'i' ? kIgnoreCase
-         : c == 'm' ? kMultiline
-         : c == 'y' ? kSticky
-         : c == 'u' ? kUnicode
-         : c == 's' ? kDotAll
-         : kInvalid;
+    return c == 'g' ? base::Optional<Flag>(kGlobal)
+         : c == 'i' ? base::Optional<Flag>(kIgnoreCase)
+         : c == 'm' ? base::Optional<Flag>(kMultiline)
+         : c == 'y' ? base::Optional<Flag>(kSticky)
+         : c == 'u' ? base::Optional<Flag>(kUnicode)
+         : c == 's' ? base::Optional<Flag>(kDotAll)
+         : base::Optional<Flag>();
     // clang-format on
   }
 
@@ -84,19 +64,28 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
 
   DECL_ACCESSORS(last_index, Object)
 
-  V8_EXPORT_PRIVATE static MaybeHandle<JSRegExp> New(Isolate* isolate,
-                                                     Handle<String> source,
-                                                     Flags flags);
+  // If the backtrack limit is set to this marker value, no limit is applied.
+  static constexpr uint32_t kNoBacktrackLimit = 0;
+
+  V8_EXPORT_PRIVATE static MaybeHandle<JSRegExp> New(
+      Isolate* isolate, Handle<String> source, Flags flags,
+      uint32_t backtrack_limit = kNoBacktrackLimit);
   static Handle<JSRegExp> Copy(Handle<JSRegExp> regexp);
 
-  static MaybeHandle<JSRegExp> Initialize(Handle<JSRegExp> regexp,
-                                          Handle<String> source, Flags flags);
+  static MaybeHandle<JSRegExp> Initialize(
+      Handle<JSRegExp> regexp, Handle<String> source, Flags flags,
+      uint32_t backtrack_limit = kNoBacktrackLimit);
   static MaybeHandle<JSRegExp> Initialize(Handle<JSRegExp> regexp,
                                           Handle<String> source,
                                           Handle<String> flags_string);
 
+  static Flags FlagsFromString(Isolate* isolate, Handle<String> flags,
+                               bool* success);
+
+  bool CanTierUp();
   bool MarkedForTierUp();
-  void ResetTierUp();
+  void ResetLastTierUpTick();
+  void TierUpTick();
   void MarkTierUpForNextExec();
 
   inline Type TypeTag() const;
@@ -105,7 +94,11 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
   static constexpr int kMaxCaptures = 1 << 16;
 
   // Number of captures (without the match itself).
-  inline int CaptureCount();
+  inline int CaptureCount() const;
+  // Each capture (including the match itself) needs two registers.
+  static int RegistersForCaptureCount(int count) { return (count + 1) * 2; }
+
+  inline int MaxRegisterCount() const;
   inline Flags GetFlags();
   inline String Pattern();
   inline Object CaptureNameMap();
@@ -123,12 +116,15 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
   }
 
   // This could be a Smi kUninitializedValue or Code.
-  Object Code(bool is_latin1) const;
+  V8_EXPORT_PRIVATE Object Code(bool is_latin1) const;
   // This could be a Smi kUninitializedValue or ByteArray.
-  Object Bytecode(bool is_latin1) const;
+  V8_EXPORT_PRIVATE Object Bytecode(bool is_latin1) const;
+
   bool ShouldProduceBytecode();
   inline bool HasCompiledCode() const;
   inline void DiscardCompiledCodeForSerialization();
+
+  uint32_t BacktrackLimit() const;
 
   // Dispatched behavior.
   DECL_PRINTER(JSRegExp)
@@ -136,13 +132,19 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
 
   /* This is already an in-object field. */
   // TODO(v8:8944): improve handling of in-object fields
-  static constexpr int kLastIndexOffset = kSize;
+  static constexpr int kLastIndexOffset = kHeaderSize;
 
   // Indices in the data array.
   static const int kTagIndex = 0;
   static const int kSourceIndex = kTagIndex + 1;
   static const int kFlagsIndex = kSourceIndex + 1;
   static const int kDataIndex = kFlagsIndex + 1;
+
+  // TODO(jgruber): Rename kDataIndex to something more appropriate.
+  // There is no 'data' field, kDataIndex is just a marker for the
+  // first non-generic index.
+  static constexpr int kMinDataArrayLength = kDataIndex;
+
   // The data fields are used in different ways depending on the
   // value of the tag.
   // Atom regexps (literal strings).
@@ -176,9 +178,29 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
   // Maps names of named capture groups (at indices 2i) to their corresponding
   // (1-based) capture group indices (at indices 2i + 1).
   static const int kIrregexpCaptureNameMapIndex = kDataIndex + 6;
-  static const int kIrregexpTierUpTicksIndex = kDataIndex + 7;
+  // Tier-up ticks are set to the value of the tier-up ticks flag. The value is
+  // decremented on each execution of the bytecode, so that the tier-up
+  // happens once the ticks reach zero.
+  // This value is ignored if the regexp-tier-up flag isn't turned on.
+  static const int kIrregexpTicksUntilTierUpIndex = kDataIndex + 7;
+  // A smi containing either the backtracking limit or kNoBacktrackLimit.
+  // TODO(jgruber): If needed, this limit could be packed into other fields
+  // above to save space.
+  static const int kIrregexpBacktrackLimit = kDataIndex + 8;
+  static const int kIrregexpDataSize = kDataIndex + 9;
 
-  static const int kIrregexpDataSize = kIrregexpTierUpTicksIndex + 1;
+  // TODO(mbid,v8:10765): At the moment the EXPERIMENTAL data array is an
+  // extension of IRREGEXP data, with most fields set to some
+  // default/uninitialized value. This is because EXPERIMENTAL and IRREGEXP
+  // regexps take the same code path in
+  // `RegExpBuiltinsAssembler::RegExpExecInternal`, which reads off various
+  // fields from the `store` array. `RegExpExecInternal` should probably
+  // distinguish between EXPERIMENTAL and IRREGEXP, and then we can get rid of
+  // all the IRREGEXP only fields.
+
+  // The same as kAtomPatternIndex for atom regexps.
+  static constexpr int kExperimentalPatternIndex = kIrregexpDataSize;
+  static constexpr int kExperimentalDataSize = kIrregexpDataSize + 1;
 
   // In-object fields.
   static const int kLastIndexFieldIndex = 0;
@@ -195,6 +217,10 @@ class JSRegExp : public TorqueGeneratedJSRegExp<JSRegExp, JSObject> {
   // The uninitialized value for a regexp code object.
   static const int kUninitializedValue = -1;
 
+  // The heuristic value for the length of the subject string for which we
+  // tier-up to the compiler immediately, instead of using the interpreter.
+  static constexpr int kTierUpForSubjectLengthValue = 1000;
+
   TQ_OBJECT_CONSTRUCTORS(JSRegExp)
 };
 
@@ -208,18 +234,60 @@ DEFINE_OPERATORS_FOR_FLAGS(JSRegExp::Flags)
 // After creation the result must be treated as a JSArray in all regards.
 class JSRegExpResult : public JSArray {
  public:
+  DECL_CAST(JSRegExpResult)
+
+  // TODO(joshualitt): We would like to add printers and verifiers to
+  // JSRegExpResult, and maybe JSRegExpResultIndices, but both have the same
+  // instance type as JSArray.
+
   // Layout description.
-  DEFINE_FIELD_OFFSET_CONSTANTS(JSArray::kSize,
-                                TORQUE_GENERATED_JSREG_EXP_RESULT_FIELDS)
+  DEFINE_FIELD_OFFSET_CONSTANTS(JSArray::kHeaderSize,
+                                TORQUE_GENERATED_JS_REG_EXP_RESULT_FIELDS)
+
+  static MaybeHandle<JSArray> GetAndCacheIndices(
+      Isolate* isolate, Handle<JSRegExpResult> regexp_result);
 
   // Indices of in-object properties.
   static const int kIndexIndex = 0;
   static const int kInputIndex = 1;
   static const int kGroupsIndex = 2;
-  static const int kInObjectPropertyCount = 3;
 
- private:
-  DISALLOW_IMPLICIT_CONSTRUCTORS(JSRegExpResult);
+  // Private internal only fields.
+  static const int kCachedIndicesOrRegExpIndex = 3;
+  static const int kNamesIndex = 4;
+  static const int kRegExpInputIndex = 5;
+  static const int kRegExpLastIndex = 6;
+  static const int kInObjectPropertyCount = 7;
+
+  OBJECT_CONSTRUCTORS(JSRegExpResult, JSArray);
+};
+
+// JSRegExpResultIndices is just a JSArray with a specific initial map.
+// This initial map adds in-object properties for "group"
+// properties, as assigned by RegExp.prototype.exec, which allows
+// faster creation of RegExp exec results.
+// This class just holds constants used when creating the result.
+// After creation the result must be treated as a JSArray in all regards.
+class JSRegExpResultIndices : public JSArray {
+ public:
+  DECL_CAST(JSRegExpResultIndices)
+
+  // Layout description.
+  DEFINE_FIELD_OFFSET_CONSTANTS(
+      JSArray::kHeaderSize, TORQUE_GENERATED_JS_REG_EXP_RESULT_INDICES_FIELDS)
+
+  static Handle<JSRegExpResultIndices> BuildIndices(
+      Isolate* isolate, Handle<RegExpMatchInfo> match_info,
+      Handle<Object> maybe_names);
+
+  // Indices of in-object properties.
+  static const int kGroupsIndex = 0;
+  static const int kInObjectPropertyCount = 1;
+
+  // Descriptor index of groups.
+  static const int kGroupsDescriptorIndex = 1;
+
+  OBJECT_CONSTRUCTORS(JSRegExpResultIndices, JSArray);
 };
 
 }  // namespace internal

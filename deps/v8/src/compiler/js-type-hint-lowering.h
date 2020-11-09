@@ -72,6 +72,7 @@ class JSTypeHintLowering {
                                          Node* control) {
       DCHECK_NOT_NULL(effect);
       DCHECK_NOT_NULL(control);
+      DCHECK(value->op()->HasProperty(Operator::kNoThrow));
       return LoweringResult(LoweringResultKind::kSideEffectFree, value, effect,
                             control);
     }
@@ -134,6 +135,13 @@ class JSTypeHintLowering {
                                           int arg_count, Node* effect,
                                           Node* control,
                                           FeedbackSlot slot) const;
+
+  // Potential reduction of property access and call operations.
+  LoweringResult ReduceGetIteratorOperation(const Operator* op, Node* obj,
+                                            Node* effect, Node* control,
+                                            FeedbackSlot load_slot,
+                                            FeedbackSlot call_slot) const;
+
   // Potential reduction of property access operations.
   LoweringResult ReduceLoadNamedOperation(const Operator* op, Node* obj,
                                           Node* effect, Node* control,

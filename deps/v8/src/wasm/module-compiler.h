@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 
+#include "include/v8-metrics.h"
 #include "src/base/optional.h"
 #include "src/common/globals.h"
 #include "src/tasks/cancelable-task.h"
@@ -44,6 +45,9 @@ std::shared_ptr<NativeModule> CompileToNativeModule(
     std::shared_ptr<const WasmModule> module, const ModuleWireBytes& wire_bytes,
     Handle<FixedArray>* export_wrappers_out);
 
+void RecompileNativeModule(NativeModule* native_module,
+                           TieringState new_tiering_state);
+
 V8_EXPORT_PRIVATE
 void CompileJsToWasmWrappers(Isolate* isolate, const WasmModule* module,
                              Handle<FixedArray>* export_wrappers_out);
@@ -54,19 +58,18 @@ void CompileJsToWasmWrappers(Isolate* isolate, const WasmModule* module,
 V8_EXPORT_PRIVATE
 WasmCode* CompileImportWrapper(
     WasmEngine* wasm_engine, NativeModule* native_module, Counters* counters,
-    compiler::WasmImportCallKind kind, FunctionSig* sig,
-    WasmImportWrapperCache::ModificationScope* cache_scope);
-
-V8_EXPORT_PRIVATE Handle<Script> CreateWasmScript(
-    Isolate* isolate, const ModuleWireBytes& wire_bytes,
-    const std::string& source_map_url);
+    compiler::WasmImportCallKind kind, const FunctionSig* sig,
+    int expected_arity, WasmImportWrapperCache::ModificationScope* cache_scope);
 
 // Triggered by the WasmCompileLazy builtin. The return value indicates whether
 // compilation was successful. Lazy compilation can fail only if validation is
 // also lazy.
 bool CompileLazy(Isolate*, NativeModule*, int func_index);
 
-int GetMaxBackgroundTasks();
+void TriggerTierUp(Isolate*, NativeModule*, int func_index);
+
+// Get the maximum concurrency for parallel compilation.
+int GetMaxCompileConcurrency();
 
 template <typename Key, typename Hash>
 class WrapperQueue {
@@ -76,7 +79,7 @@ class WrapperQueue {
   // Thread-safe.
   base::Optional<Key> pop() {
     base::Optional<Key> key = base::nullopt;
-    base::LockGuard<base::Mutex> lock(&mutex_);
+    base::MutexGuard lock(&mutex_);
     auto it = queue_.begin();
     if (it != queue_.end()) {
       key = *it;
@@ -89,6 +92,11 @@ class WrapperQueue {
   // successful.
   // Not thread-safe.
   bool insert(const Key& key) { return queue_.insert(key).second; }
+
+  size_t size() {
+    base::MutexGuard lock(&mutex_);
+    return queue_.size();
+  }
 
  private:
   base::Mutex mutex_;
@@ -119,7 +127,8 @@ class AsyncCompileJob {
 
   Isolate* isolate() const { return isolate_; }
 
-  Handle<Context> context() const { return native_context_; }
+  Handle<NativeContext> context() const { return native_context_; }
+  v8::metrics::Recorder::ContextId context_id() const { return context_id_; }
 
  private:
   class CompileTask;
@@ -143,10 +152,14 @@ class AsyncCompileJob {
     return outstanding_finishers_.fetch_sub(1) == 1;
   }
 
-  void CreateNativeModule(std::shared_ptr<const WasmModule> module);
+  void CreateNativeModule(std::shared_ptr<const WasmModule> module,
+                          size_t code_size_estimate);
+  // Return true for cache hit, false for cache miss.
+  bool GetOrCreateNativeModule(std::shared_ptr<const WasmModule> module,
+                               size_t code_size_estimate);
   void PrepareRuntimeObjects();
 
-  void FinishCompile();
+  void FinishCompile(bool is_after_cache_hit);
 
   void DecodeFailed(const WasmError&);
   void AsyncCompileFailed();
@@ -191,13 +204,15 @@ class AsyncCompileJob {
   const char* const api_method_name_;
   const WasmFeatures enabled_features_;
   const bool wasm_lazy_compilation_;
+  base::TimeTicks start_time_;
   // Copy of the module wire bytes, moved into the {native_module_} on its
   // creation.
   std::unique_ptr<byte[]> bytes_copy_;
   // Reference to the wire bytes (held in {bytes_copy_} or as part of
   // {native_module_}).
   ModuleWireBytes wire_bytes_;
-  Handle<Context> native_context_;
+  Handle<NativeContext> native_context_;
+  v8::metrics::Recorder::ContextId context_id_;
   const std::shared_ptr<CompilationResultResolver> resolver_;
 
   Handle<WasmModuleObject> module_object_;

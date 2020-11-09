@@ -81,6 +81,26 @@ TEST_F(URLTest, Base3) {
   EXPECT_EQ(simple.path(), "/baz");
 }
 
+TEST_F(URLTest, TruncatedAfterProtocol) {
+  char input[2] = { 'q', ':' };
+  URL simple(input, sizeof(input));
+
+  EXPECT_FALSE(simple.flags() & URL_FLAGS_FAILED);
+  EXPECT_EQ(simple.protocol(), "q:");
+  EXPECT_EQ(simple.host(), "");
+  EXPECT_EQ(simple.path(), "/");
+}
+
+TEST_F(URLTest, TruncatedAfterProtocol2) {
+  char input[6] = { 'h', 't', 't', 'p', ':', '/' };
+  URL simple(input, sizeof(input));
+
+  EXPECT_TRUE(simple.flags() & URL_FLAGS_FAILED);
+  EXPECT_EQ(simple.protocol(), "http:");
+  EXPECT_EQ(simple.host(), "");
+  EXPECT_EQ(simple.path(), "");
+}
+
 TEST_F(URLTest, ToFilePath) {
 #define T(url, path) EXPECT_EQ(path, URL(url).ToFilePath())
   T("http://example.org/foo/bar", "");
@@ -116,26 +136,26 @@ TEST_F(URLTest, FromFilePath) {
 #ifdef _WIN32
   file_url = URL::FromFilePath("C:\\Program Files\\");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/C:/Program%20Files/", file_url.path());
+  EXPECT_EQ("//C:/Program%20Files/", file_url.path());
 
   file_url = URL::FromFilePath("C:\\a\\b\\c");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/C:/a/b/c", file_url.path());
+  EXPECT_EQ("//C:/a/b/c", file_url.path());
 
   file_url = URL::FromFilePath("b:\\a\\%%.js");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/b:/a/%25%25.js", file_url.path());
+  EXPECT_EQ("//b:/a/%25%25.js", file_url.path());
 #else
   file_url = URL::FromFilePath("/");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/", file_url.path());
+  EXPECT_EQ("//", file_url.path());
 
   file_url = URL::FromFilePath("/a/b/c");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/a/b/c", file_url.path());
+  EXPECT_EQ("//a/b/c", file_url.path());
 
   file_url = URL::FromFilePath("/a/%%.js");
   EXPECT_EQ("file:", file_url.protocol());
-  EXPECT_EQ("/a/%25%25.js", file_url.path());
+  EXPECT_EQ("//a/%25%25.js", file_url.path());
 #endif
 }

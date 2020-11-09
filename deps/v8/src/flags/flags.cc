@@ -371,8 +371,8 @@ bool TryParseUnsigned(Flag* flag, const char* arg, const char* value,
 }
 
 // static
-int FlagList::SetFlagsFromCommandLine(int* argc, char** argv,
-                                      bool remove_flags) {
+int FlagList::SetFlagsFromCommandLine(int* argc, char** argv, bool remove_flags,
+                                      HelpOptions help_options) {
   int return_code = 0;
   // parse arguments
   for (int i = 1; i < *argc;) {
@@ -482,8 +482,13 @@ int FlagList::SetFlagsFromCommandLine(int* argc, char** argv,
   }
 
   if (FLAG_help) {
+    if (help_options.HasUsage()) {
+      PrintF(stdout, "%s", help_options.usage());
+    }
     PrintHelp();
-    exit(0);
+    if (help_options.ShouldExit()) {
+      exit(0);
+    }
   }
 
   if (remove_flags) {
@@ -563,21 +568,14 @@ void FlagList::PrintHelp() {
   CpuFeatures::PrintFeatures();
 
   StdoutStream os;
-  os << "Synopsis:\n"
-        "  shell [options] [--shell] [<file>...]\n"
-        "  d8 [options] [-e <string>] [--shell] [[--module] <file>...]\n\n"
-        "  -e        execute a string in V8\n"
-        "  --shell   run an interactive JavaScript shell\n"
-        "  --module  execute a file as a JavaScript module\n\n"
-        "Note: the --module option is implicitly enabled for *.mjs files.\n\n"
-        "The following syntax for options is accepted (both '-' and '--' are "
+  os << "The following syntax for options is accepted (both '-' and '--' are "
         "ok):\n"
         "  --flag        (bool flags only)\n"
         "  --no-flag     (bool flags only)\n"
         "  --flag=value  (non-bool flags only, no spaces around '=')\n"
         "  --flag value  (non-bool flags only)\n"
-        "  --            (captures all remaining args in JavaScript)\n\n"
-        "Options:\n";
+        "  --            (captures all remaining args in JavaScript)\n\n";
+  os << "Options:\n";
 
   for (const Flag& f : flags) {
     os << "  --";
@@ -594,11 +592,11 @@ static uint32_t flag_hash = 0;
 
 void ComputeFlagListHash() {
   std::ostringstream modified_args_as_string;
-#ifdef DEBUG
-  modified_args_as_string << "debug";
-#endif  // DEBUG
-  if (FLAG_embedded_builtins) {
-    modified_args_as_string << "embedded";
+  if (COMPRESS_POINTERS_BOOL) {
+    modified_args_as_string << "ptr-compr";
+  }
+  if (DEBUG_BOOL) {
+    modified_args_as_string << "debug";
   }
   for (size_t i = 0; i < num_flags; ++i) {
     Flag* current = &flags[i];

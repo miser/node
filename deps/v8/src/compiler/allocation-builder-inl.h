@@ -5,17 +5,19 @@
 #ifndef V8_COMPILER_ALLOCATION_BUILDER_INL_H_
 #define V8_COMPILER_ALLOCATION_BUILDER_INL_H_
 
-#include "src/compiler/allocation-builder.h"
-
 #include "src/compiler/access-builder.h"
+#include "src/compiler/allocation-builder.h"
 #include "src/objects/map-inl.h"
+#include "torque-generated/exported-class-definitions-tq-inl.h"
+#include "torque-generated/exported-class-definitions-tq.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
 
 void AllocationBuilder::AllocateContext(int variadic_part_length, MapRef map) {
-  DCHECK(IsInRange(map.instance_type(), FIRST_CONTEXT_TYPE, LAST_CONTEXT_TYPE));
+  DCHECK(base::IsInRange(map.instance_type(), FIRST_CONTEXT_TYPE,
+                         LAST_CONTEXT_TYPE));
   DCHECK_NE(NATIVE_CONTEXT_TYPE, map.instance_type());
   int size = Context::SizeFor(variadic_part_length);
   Allocate(size, AllocationType::kYoung, Type::OtherInternal());
@@ -34,6 +36,14 @@ void AllocationBuilder::AllocateArray(int length, MapRef map,
   int size = (map.instance_type() == FIXED_ARRAY_TYPE)
                  ? FixedArray::SizeFor(length)
                  : FixedDoubleArray::SizeFor(length);
+  Allocate(size, allocation, Type::OtherInternal());
+  Store(AccessBuilder::ForMap(), map);
+  Store(AccessBuilder::ForFixedArrayLength(), jsgraph()->Constant(length));
+}
+
+void AllocationBuilder::AllocateSloppyArgumentElements(
+    int length, MapRef map, AllocationType allocation) {
+  int size = SloppyArgumentsElements::SizeFor(length);
   Allocate(size, allocation, Type::OtherInternal());
   Store(AccessBuilder::ForMap(), map);
   Store(AccessBuilder::ForFixedArrayLength(), jsgraph()->Constant(length));

@@ -15,11 +15,14 @@ using v8::Number;
 using v8::Object;
 using v8::Value;
 
-// The config binding is used to provide an internal view of compile or runtime
+// The config binding is used to provide an internal view of compile time
 // config options that are required internally by lib/*.js code. This is an
 // alternative to dropping additional properties onto the process object as
 // has been the practice previously in node.cc.
 
+// Command line arguments are already accessible in the JS land via
+// require('internal/options').getOptionValue('--some-option'). Do not add them
+// here.
 static void Initialize(Local<Object> target,
                        Local<Value> unused,
                        Local<Context> context,
@@ -81,9 +84,6 @@ static void Initialize(Local<Object> target,
 #if defined HAVE_DTRACE || defined HAVE_ETW
   READONLY_TRUE_PROPERTY(target, "hasDtrace");
 #endif
-
-  READONLY_PROPERTY(target, "hasCachedBuiltins",
-     v8::Boolean::New(isolate, native_module::has_code_cache));
 }  // InitConfig
 
 }  // namespace node

@@ -5,9 +5,9 @@
 #ifndef V8_CODEGEN_HANDLER_TABLE_H_
 #define V8_CODEGEN_HANDLER_TABLE_H_
 
+#include "src/base/bit-field.h"
 #include "src/common/assert-scope.h"
 #include "src/common/globals.h"
-#include "src/utils/utils.h"
 
 namespace v8 {
 namespace internal {
@@ -15,6 +15,10 @@ namespace internal {
 class Assembler;
 class ByteArray;
 class BytecodeArray;
+
+namespace wasm {
+class WasmCode;
+}  // namespace wasm
 
 // HandlerTable is a byte array containing entries for exception handlers in
 // the code object it is associated with. The tables come in two flavors:
@@ -43,6 +47,10 @@ class V8_EXPORT_PRIVATE HandlerTable {
     ASYNC_AWAIT,  // The exception will be caught and cause a promise rejection
                   // in the desugaring of an async function, so special
                   // async/await handling in the debugger can take place.
+    UNCAUGHT_ASYNC_AWAIT,  // The exception will be caught and cause a promise
+                           // rejection in the desugaring of an async REPL
+                           // script. The corresponding message object needs to
+                           // be kept alive on the Isolate though.
   };
 
   enum EncodingMode { kRangeBasedEncoding, kReturnAddressBasedEncoding };
@@ -50,6 +58,7 @@ class V8_EXPORT_PRIVATE HandlerTable {
   // Constructors for the various encodings.
   explicit HandlerTable(Code code);
   explicit HandlerTable(ByteArray byte_array);
+  explicit HandlerTable(const wasm::WasmCode* code);
   explicit HandlerTable(BytecodeArray bytecode_array);
   HandlerTable(Address handler_table, int handler_table_size,
                EncodingMode encoding_mode);
@@ -102,18 +111,18 @@ class V8_EXPORT_PRIVATE HandlerTable {
   int GetReturnHandler(int index) const;
 
   // Number of entries in the loaded handler table.
-  int number_of_entries_;
+  const int number_of_entries_;
 
 #ifdef DEBUG
   // The encoding mode of the table. Mostly useful for debugging to check that
   // used accessors and constructors fit together.
-  EncodingMode mode_;
+  const EncodingMode mode_;
 #endif
 
-  // Direct pointer into the encoded data. This pointer points into objects on
-  // the GC heap (either {ByteArray} or {Code}) and hence would become stale
-  // during a collection. Hence we disallow any allocation.
-  Address raw_encoded_data_;
+  // Direct pointer into the encoded data. This pointer potentially points into
+  // objects on the GC heap (either {ByteArray} or {Code}) and could become
+  // stale during a collection. Hence we disallow any allocation.
+  const Address raw_encoded_data_;
   DISALLOW_HEAP_ALLOCATION(no_gc_)
 
   // Layout description for handler table based on ranges.
@@ -129,8 +138,8 @@ class V8_EXPORT_PRIVATE HandlerTable {
   static const int kReturnEntrySize = 2;
 
   // Encoding of the {handler} field.
-  using HandlerPredictionField = BitField<CatchPrediction, 0, 3>;
-  using HandlerOffsetField = BitField<int, 3, 29>;
+  using HandlerPredictionField = base::BitField<CatchPrediction, 0, 3>;
+  using HandlerOffsetField = base::BitField<int, 3, 29>;
 };
 
 }  // namespace internal

@@ -7,16 +7,6 @@ rules:
   no-mixed-operators:
     - error
     - groups: [[ "&&", "||" ]]
-  no-restricted-globals:
-    - error
-    - name: JSON
-      message: "Use `const { JSON } = primordials;` instead of the global."
-    - name: Math
-      message: "Use `const { Math } = primordials;` instead of the global."
-    - name: Object
-      message: "Use `const { Object } = primordials;` instead of the global."
-    - name: Reflect
-      message: "Use `const { Reflect } = primordials;` instead of the global."
   no-restricted-syntax:
     # Config copied from .eslintrc.js
     - error
@@ -38,23 +28,61 @@ rules:
   # Custom rules in tools/eslint-rules
   node-core/lowercase-name-for-primitive: error
   node-core/non-ascii-character: error
+  node-core/prefer-primordials:
+    - error
+    - name: Array
+    - name: ArrayBuffer
+    - name: BigInt
+    - name: BigInt64Array
+    - name: BigUint64Array
+    - name: Boolean
+    - name: DataView
+    - name: Date
+    - name: Error
+      ignore:
+        - stackTraceLimit
+        - captureStackTrace
+        - prepareStackTrace
+        - isPrototypeOf
+    - name: EvalError
+    - name: Float32Array
+    - name: Float64Array
+    - name: Function
+    - name: Int16Array
+    - name: Int32Array
+    - name: Int8Array
+    - name: isFinite
+      into: Number
+    - name: isNaN
+      into: Number
+    - name: JSON
+    - name: Map
+    - name: Math
+    - name: Number
+    - name: Object
+    - name: parseFloat
+      into: Number
+    - name: parseInt
+      into: Number
+    - name: Promise
+    - name: RangeError
+    - name: ReferenceError
+    - name: Reflect
+    - name: RegExp
+    - name: Set
+    - name: String
+    - name: Symbol
+    - name: SyntaxError
+    - name: TypeError
+    - name: Uint16Array
+    - name: Uint32Array
+    - name: Uint8Array
+    - name: Uint8ClampedArray
+    - name: URIError
+    - name: WeakMap
+    - name: WeakSet
 globals:
   Intl: false
-  # Assertions
-  CHECK: false
-  CHECK_EQ: false
-  CHECK_GE: false
-  CHECK_GT: false
-  CHECK_LE: false
-  CHECK_LT: false
-  CHECK_NE: false
-  DCHECK: false
-  DCHECK_EQ: false
-  DCHECK_GE: false
-  DCHECK_GT: false
-  DCHECK_LE: false
-  DCHECK_LT: false
-  DCHECK_NE: false
   # Parameters passed to internal modules
   global: false
   require: false

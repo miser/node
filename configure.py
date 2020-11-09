@@ -40,10 +40,6 @@ import getmoduleversion
 import getnapibuildversion
 from gyp_node import run_gyp
 
-# imports in deps/v8/tools/node
-sys.path.insert(0, os.path.join('deps', 'v8', 'tools', 'node'))
-from fetch_deps import FetchDeps
-
 # parse our options
 parser = optparse.OptionParser()
 
@@ -89,6 +85,11 @@ parser.add_option('--debug',
     dest='debug',
     help='also build debug build')
 
+parser.add_option('--debug-node',
+    action='store_true',
+    dest='debug_node',
+    help='build the Node.js part of the binary with debugging symbols')
+
 parser.add_option('--dest-cpu',
     action='store',
     dest='dest_cpu',
@@ -111,6 +112,16 @@ parser.add_option('--dest-os',
     dest='dest_os',
     choices=valid_os,
     help='operating system to build for ({0})'.format(', '.join(valid_os)))
+
+parser.add_option('--error-on-warn',
+    action='store_true',
+    dest='error_on_warn',
+    help='Turn compiler warnings into errors for node core sources.')
+
+parser.add_option('--experimental-quic',
+    action='store_true',
+    dest='experimental_quic',
+    help='enable experimental quic support')
 
 parser.add_option('--gdb',
     action='store_true',
@@ -159,6 +170,11 @@ parser.add_option("--link-module",
          "This module will be referenced by path without extension; "
          "e.g. /root/x/y.js will be referenced via require('root/x/y'). "
          "Can be used multiple times")
+
+parser.add_option('--openssl-default-cipher-list',
+    action='store',
+    dest='openssl_default_cipher_list',
+    help='Use the specified cipher list as the default cipher list')
 
 parser.add_option("--openssl-no-asm",
     action="store_true",
@@ -254,6 +270,48 @@ shared_optgroup.add_option('--shared-nghttp2-libpath',
     dest='shared_nghttp2_libpath',
     help='a directory to search for the shared nghttp2 DLLs')
 
+shared_optgroup.add_option('--shared-ngtcp2',
+    action='store_true',
+    dest='shared_ngtcp2',
+    help='link to a shared ngtcp2 DLL instead of static linking')
+
+shared_optgroup.add_option('--shared-ngtcp2-includes',
+    action='store',
+    dest='shared_ngtcp2_includes',
+    help='directory containing ngtcp2 header files')
+
+shared_optgroup.add_option('--shared-ngtcp2-libname',
+    action='store',
+    dest='shared_ngtcp2_libname',
+    default='ngtcp2',
+    help='alternative lib name to link to [default: %default]')
+
+shared_optgroup.add_option('--shared-ngtcp2-libpath',
+    action='store',
+    dest='shared_ngtcp2_libpath',
+    help='a directory to search for the shared ngtcp2 DLLs')
+
+shared_optgroup.add_option('--shared-nghttp3',
+    action='store_true',
+    dest='shared_nghttp3',
+    help='link to a shared nghttp3 DLL instead of static linking')
+
+shared_optgroup.add_option('--shared-nghttp3-includes',
+    action='store',
+    dest='shared_nghttp3_includes',
+    help='directory containing nghttp3 header files')
+
+shared_optgroup.add_option('--shared-nghttp3-libname',
+    action='store',
+    dest='shared_nghttp3_libname',
+    default='nghttp3',
+    help='alternative lib name to link to [default: %default]')
+
+shared_optgroup.add_option('--shared-nghttp3-libpath',
+    action='store',
+    dest='shared_nghttp3_libpath',
+    help='a directory to search for the shared nghttp3 DLLs')
+
 shared_optgroup.add_option('--shared-openssl',
     action='store_true',
     dest='shared_openssl',
@@ -296,25 +354,46 @@ shared_optgroup.add_option('--shared-zlib-libpath',
     dest='shared_zlib_libpath',
     help='a directory to search for the shared zlib DLL')
 
+shared_optgroup.add_option('--shared-brotli',
+    action='store_true',
+    dest='shared_brotli',
+    help='link to a shared brotli DLL instead of static linking')
+
+shared_optgroup.add_option('--shared-brotli-includes',
+    action='store',
+    dest='shared_brotli_includes',
+    help='directory containing brotli header files')
+
+shared_optgroup.add_option('--shared-brotli-libname',
+    action='store',
+    dest='shared_brotli_libname',
+    default='brotlidec,brotlienc',
+    help='alternative lib name to link to [default: %default]')
+
+shared_optgroup.add_option('--shared-brotli-libpath',
+    action='store',
+    dest='shared_brotli_libpath',
+    help='a directory to search for the shared brotli DLL')
+
 shared_optgroup.add_option('--shared-cares',
     action='store_true',
-    dest='shared_libcares',
+    dest='shared_cares',
     help='link to a shared cares DLL instead of static linking')
 
 shared_optgroup.add_option('--shared-cares-includes',
     action='store',
-    dest='shared_libcares_includes',
+    dest='shared_cares_includes',
     help='directory containing cares header files')
 
 shared_optgroup.add_option('--shared-cares-libname',
     action='store',
-    dest='shared_libcares_libname',
+    dest='shared_cares_libname',
     default='cares',
     help='alternative lib name to link to [default: %default]')
 
 shared_optgroup.add_option('--shared-cares-libpath',
     action='store',
-    dest='shared_libcares_libpath',
+    dest='shared_cares_libpath',
     help='a directory to search for the shared cares DLL')
 
 parser.add_option_group(shared_optgroup)
@@ -346,10 +425,20 @@ parser.add_option('--enable-trace-maps',
     dest='trace_maps',
     help='Enable the --trace-maps flag in V8 (use at your own risk)')
 
+parser.add_option('--experimental-enable-pointer-compression',
+    action='store_true',
+    dest='enable_pointer_compression',
+    help='[Experimental] Enable V8 pointer compression (limits max heap to 4GB and breaks ABI compatibility)')
+
 parser.add_option('--v8-options',
     action='store',
     dest='v8_options',
     help='v8 options to pass, see `node --v8-options` for examples.')
+
+parser.add_option('--with-ossfuzz',
+    action='store_true',
+    dest='ossfuzz',
+    help='Enables building of fuzzers. This command should be run in an OSS-Fuzz Docker image.')
 
 parser.add_option('--with-arm-float-abi',
     action='store',
@@ -402,13 +491,20 @@ parser.add_option('--with-etw',
 parser.add_option('--use-largepages',
     action='store_true',
     dest='node_use_large_pages',
-    help='build with Large Pages support. This feature is supported only on Linux kernel' +
-         '>= 2.6.38 with Transparent Huge pages enabled and FreeBSD')
+    help='This option has no effect. --use-largepages is now a runtime option.')
 
 parser.add_option('--use-largepages-script-lld',
     action='store_true',
     dest='node_use_large_pages_script_lld',
-    help='link against the LLVM ld linker script. Implies -fuse-ld=lld in the linker flags')
+    help='This option has no effect. --use-largepages is now a runtime option.')
+
+parser.add_option('--use-section-ordering-file',
+    action='store',
+    dest='node_section_ordering_info',
+    default='',
+    help='Pass a section ordering file to the linker. This requires that ' +
+         'Node.js be linked using the gold linker. The gold linker must have ' +
+         'version 1.2 or greater.')
 
 intl_optgroup.add_option('--with-intl',
     action='store',
@@ -445,6 +541,14 @@ intl_optgroup.add_option('--with-icu-source',
         'the icu4c source archive. '
         'v%d.x or later recommended.' % icu_versions['minimum_icu'])
 
+intl_optgroup.add_option('--with-icu-default-data-dir',
+    action='store',
+    dest='with_icu_default_data_dir',
+    help='Path to the icuXXdt{lb}.dat file. If unspecified, ICU data will '
+         'only be read if the NODE_ICU_DATA environment variable or the '
+         '--icu-data-dir runtime argument is used. This option has effect '
+         'only when Node.js is built with --with-intl=small-icu.')
+
 parser.add_option('--with-ltcg',
     action='store_true',
     dest='with_ltcg',
@@ -454,6 +558,11 @@ parser.add_option('--without-node-snapshot',
     action='store_true',
     dest='without_node_snapshot',
     help='Turn off V8 snapshot integration. Currently experimental.')
+
+parser.add_option('--without-node-code-cache',
+    action='store_true',
+    dest='without_node_code_cache',
+    help='Turn off V8 Code cache integration.')
 
 intl_optgroup.add_option('--download',
     action='store',
@@ -495,12 +604,12 @@ parser.add_option('--without-npm',
     dest='without_npm',
     help='do not install the bundled npm (package manager)')
 
+# Dummy option for backwards compatibility
 parser.add_option('--without-report',
     action='store_true',
-    dest='without_report',
-    help='build without report')
+    dest='unused_without_report',
+    help=optparse.SUPPRESS_HELP)
 
-# Dummy option for backwards compatibility
 parser.add_option('--with-snapshot',
     action='store_true',
     dest='unused_with_snapshot',
@@ -536,7 +645,7 @@ parser.add_option('--ninja',
 parser.add_option('--enable-asan',
     action='store_true',
     dest='enable_asan',
-    help='build with asan')
+    help='compile for Address Sanitizer to find memory bugs')
 
 parser.add_option('--enable-static',
     action='store_true',
@@ -574,12 +683,6 @@ parser.add_option('--without-bundled-v8',
     help='do not use V8 includes from the bundled deps folder. ' +
          '(This mode is not officially supported for regular applications)')
 
-parser.add_option('--build-v8-with-gn',
-    action='store_true',
-    dest='build_v8_with_gn',
-    default=False,
-    help='build V8 using GN instead of gyp')
-
 parser.add_option('--verbose',
     action='store_true',
     dest='verbose',
@@ -591,6 +694,32 @@ parser.add_option('--v8-non-optimized-debug',
     dest='v8_non_optimized_debug',
     default=False,
     help='compile V8 with minimal optimizations and with runtime checks')
+
+parser.add_option('--v8-with-dchecks',
+    action='store_true',
+    dest='v8_with_dchecks',
+    default=False,
+    help='compile V8 with debug checks and runtime debugging features enabled')
+
+parser.add_option('--v8-lite-mode',
+    action='store_true',
+    dest='v8_lite_mode',
+    default=False,
+    help='compile V8 in lite mode for constrained environments (lowers V8 '+
+         'memory footprint, but also implies no just-in-time compilation ' +
+         'support, thus much slower execution)')
+
+parser.add_option('--v8-enable-object-print',
+    action='store_true',
+    dest='v8_enable_object_print',
+    default=True,
+    help='compile V8 with auxiliar functions for native debuggers')
+
+parser.add_option('--node-builtin-modules-path',
+    action='store',
+    dest='node_builtin_modules_path',
+    default=False,
+    help='node will load builtin modules from disk instead of from binary')
 
 # Create compile_commands.json in out/Debug and out/Release.
 parser.add_option('-C',
@@ -652,7 +781,11 @@ def pkg_config(pkg):
   retval = ()
   for flag in ['--libs-only-l', '--cflags-only-I',
                '--libs-only-L', '--modversion']:
-    args += [flag, pkg]
+    args += [flag]
+    if isinstance(pkg, list):
+      args += pkg
+    else:
+      args += [pkg]
     try:
       proc = subprocess.Popen(shlex.split(pkg_config) + args,
                               stdout=subprocess.PIPE)
@@ -728,7 +861,7 @@ def get_nasm_version(asm):
 
 def get_llvm_version(cc):
   return get_version_helper(
-    cc, r"(^(?:FreeBSD )?clang version|based on LLVM) ([0-9]+\.[0-9]+)")
+    cc, r"(^(?:.+ )?clang version|based on LLVM) ([0-9]+\.[0-9]+)")
 
 def get_xcode_version(cc):
   return get_version_helper(
@@ -773,13 +906,19 @@ def check_compiler(o):
     return
 
   ok, is_clang, clang_version, gcc_version = try_check_compiler(CXX, 'c++')
+  version_str = ".".join(map(str, clang_version if is_clang else gcc_version))
+  print_verbose('Detected %sC++ compiler (CXX=%s) version: %s' %
+                ('clang ' if is_clang else '', CXX, version_str))
   if not ok:
     warn('failed to autodetect C++ compiler version (CXX=%s)' % CXX)
   elif clang_version < (8, 0, 0) if is_clang else gcc_version < (6, 3, 0):
     warn('C++ compiler (CXX=%s, %s) too old, need g++ 6.3.0 or clang++ 8.0.0' %
-      (CXX, ".".join(map(str, clang_version if is_clang else gcc_version))))
+         (CXX, version_str))
 
   ok, is_clang, clang_version, gcc_version = try_check_compiler(CC, 'c')
+  version_str = ".".join(map(str, clang_version if is_clang else gcc_version))
+  print_verbose('Detected %sC compiler (CC=%s) version: %s' %
+                ('clang ' if is_clang else '', CC, version_str))
   if not ok:
     warn('failed to autodetect C compiler version (CC=%s)' % CC)
   elif not is_clang and gcc_version < (4, 2, 0):
@@ -787,7 +926,7 @@ def check_compiler(o):
     # do for the C bits.  However, we might as well encourage people to upgrade
     # to a version that is not completely ancient.
     warn('C compiler (CC=%s, %s) too old, need gcc 4.2 or clang 3.2' %
-      (CC, ".".join(map(str, gcc_version))))
+         (CC, version_str))
 
   o['variables']['llvm_version'] = get_llvm_version(CC) if is_clang else '0.0'
 
@@ -929,12 +1068,14 @@ def configure_arm(o):
   o['variables']['arm_fpu'] = options.arm_fpu or arm_fpu
 
 
-def configure_mips(o):
+def configure_mips(o, target_arch):
   can_use_fpu_instructions = (options.mips_float_abi != 'soft')
   o['variables']['v8_can_use_fpu_instructions'] = b(can_use_fpu_instructions)
   o['variables']['v8_use_mips_abi_hardfloat'] = b(can_use_fpu_instructions)
   o['variables']['mips_arch_variant'] = options.mips_arch_variant
   o['variables']['mips_fpu_mode'] = options.mips_fpu_mode
+  host_byteorder = 'little' if target_arch in ('mipsel', 'mips64el') else 'big'
+  o['variables']['v8_host_byteorder'] = host_byteorder
 
 
 def gcc_version_ge(version_checked):
@@ -951,8 +1092,9 @@ def configure_node(o):
     o['variables']['OS'] = 'android'
   o['variables']['node_prefix'] = options.prefix
   o['variables']['node_install_npm'] = b(not options.without_npm)
-  o['variables']['node_report'] = b(not options.without_report)
+  o['variables']['debug_node'] = b(options.debug_node)
   o['default_configuration'] = 'Debug' if options.debug else 'Release'
+  o['variables']['error_on_warn'] = b(options.error_on_warn)
 
   host_arch = host_arch_win() if os.name == 'nt' else host_arch_cc()
   target_arch = options.dest_cpu or host_arch
@@ -970,20 +1112,30 @@ def configure_node(o):
   cross_compiling = (options.cross_compiling
                      if options.cross_compiling is not None
                      else target_arch != host_arch)
+  if cross_compiling:
+    os.environ['GYP_CROSSCOMPILE'] = "1"
   if options.unused_without_snapshot:
     warn('building --without-snapshot is no longer possible')
 
   o['variables']['want_separate_host_toolset'] = int(cross_compiling)
 
-  if not options.without_node_snapshot:
-    o['variables']['node_use_node_snapshot'] = b(not cross_compiling)
-  else:
+  if options.without_node_snapshot or options.node_builtin_modules_path:
     o['variables']['node_use_node_snapshot'] = 'false'
+  else:
+    o['variables']['node_use_node_snapshot'] = b(
+      not cross_compiling and not options.shared)
+
+  if options.without_node_code_cache or options.node_builtin_modules_path:
+    o['variables']['node_use_node_code_cache'] = 'false'
+  else:
+    # TODO(refack): fix this when implementing embedded code-cache when cross-compiling.
+    o['variables']['node_use_node_code_cache'] = b(
+      not cross_compiling and not options.shared)
 
   if target_arch == 'arm':
     configure_arm(o)
   elif target_arch in ('mips', 'mipsel', 'mips64el'):
-    configure_mips(o)
+    configure_mips(o, target_arch)
 
   if flavor == 'aix':
     o['variables']['node_target_type'] = 'static_library'
@@ -1042,27 +1194,12 @@ def configure_node(o):
   else:
     o['variables']['node_use_dtrace'] = 'false'
 
-  if options.node_use_large_pages and not flavor in ('linux', 'freebsd', 'mac'):
-    raise Exception(
-      'Large pages are supported only on Linux, FreeBSD and MacOS Systems.')
-  if options.node_use_large_pages and flavor in ('linux', 'freebsd', 'mac'):
-    if options.shared or options.enable_static:
-      raise Exception(
-        'Large pages are supported only while creating node executable.')
-    if target_arch!="x64":
-      raise Exception(
-        'Large pages are supported only x64 platform.')
-    if flavor == 'mac':
-      info('macOS server with 32GB or more is recommended')
-    if flavor == 'linux':
-      # Example full version string: 2.6.32-696.28.1.el6.x86_64
-      FULL_KERNEL_VERSION=os.uname()[2]
-      KERNEL_VERSION=FULL_KERNEL_VERSION.split('-')[0]
-      if KERNEL_VERSION < "2.6.38" and flavor == 'linux':
-        raise Exception(
-          'Large pages need Linux kernel version >= 2.6.38')
-  o['variables']['node_use_large_pages'] = b(options.node_use_large_pages)
-  o['variables']['node_use_large_pages_script_lld'] = b(options.node_use_large_pages_script_lld)
+  if options.node_use_large_pages or options.node_use_large_pages_script_lld:
+    warn('''The `--use-largepages` and `--use-largepages-script-lld` options
+         have no effect during build time. Support for mapping to large pages is
+         now a runtime option of Node.js. Run `node --use-largepages` or add
+         `--use-largepages` to the `NODE_OPTIONS` environment variable once
+         Node.js is built to enable mapping to large pages.''')
 
   if options.no_ifaddrs:
     o['defines'] += ['SUNOS_NO_IFADDRS']
@@ -1099,21 +1236,30 @@ def configure_node(o):
   else:
     o['variables']['debug_nghttp2'] = 'false'
 
+  if options.experimental_quic:
+    if options.shared_openssl:
+      raise Exception('QUIC requires a modified version of OpenSSL and '
+                      'cannot be enabled when using --shared-openssl.')
+    o['variables']['experimental_quic'] = 1
+  else:
+    o['variables']['experimental_quic'] = 'false'
+
   o['variables']['node_no_browser_globals'] = b(options.no_browser_globals)
-  # TODO(refack): fix this when implementing embedded code-cache when cross-compiling.
-  if o['variables']['want_separate_host_toolset'] == 0:
-    o['variables']['node_code_cache'] = 'yes' # For testing
+
   o['variables']['node_shared'] = b(options.shared)
   node_module_version = getmoduleversion.get_version()
 
-  if sys.platform == 'darwin':
+  if options.dest_os == 'android':
+    shlib_suffix = 'so'
+  elif sys.platform == 'darwin':
     shlib_suffix = '%s.dylib'
   elif sys.platform.startswith('aix'):
     shlib_suffix = '%s.a'
   else:
     shlib_suffix = 'so.%s'
+  if '%s' in shlib_suffix:
+    shlib_suffix %= node_module_version
 
-  shlib_suffix %= node_module_version
   o['variables']['node_module_version'] = int(node_module_version)
   o['variables']['shlib_suffix'] = shlib_suffix
 
@@ -1134,16 +1280,21 @@ def configure_node(o):
   else:
     o['variables']['node_target_type'] = 'executable'
 
+  if options.node_builtin_modules_path:
+    print('Warning! Loading builtin modules from disk is for development')
+    o['variables']['node_builtin_modules_path'] = options.node_builtin_modules_path
+
 def configure_napi(output):
   version = getnapibuildversion.get_napi_version()
   output['variables']['napi_build_version'] = version
 
-def configure_library(lib, output):
+def configure_library(lib, output, pkgname=None):
   shared_lib = 'shared_' + lib
   output['variables']['node_' + shared_lib] = b(getattr(options, shared_lib))
 
   if getattr(options, shared_lib):
-    (pkg_libs, pkg_cflags, pkg_libpath, pkg_modversion) = pkg_config(lib)
+    (pkg_libs, pkg_cflags, pkg_libpath, pkg_modversion) = (
+        pkg_config(pkgname or lib))
 
     if options.__dict__[shared_lib + '_includes']:
       output['include_dirs'] += [options.__dict__[shared_lib + '_includes']]
@@ -1174,12 +1325,17 @@ def configure_library(lib, output):
 
 
 def configure_v8(o):
+  o['variables']['v8_enable_lite_mode'] = 1 if options.v8_lite_mode else 0
   o['variables']['v8_enable_gdbjit'] = 1 if options.gdb else 0
   o['variables']['v8_no_strict_aliasing'] = 1  # Work around compiler bugs.
   o['variables']['v8_optimized_debug'] = 0 if options.v8_non_optimized_debug else 1
+  o['variables']['dcheck_always_on'] = 1 if options.v8_with_dchecks else 0
+  o['variables']['v8_enable_object_print'] = 1 if options.v8_enable_object_print else 0
   o['variables']['v8_random_seed'] = 0  # Use a random seed for hash tables.
   o['variables']['v8_promise_internal_field_count'] = 1 # Add internal field to promises for async hooks.
   o['variables']['v8_use_siphash'] = 0 if options.without_siphash else 1
+  o['variables']['v8_enable_pointer_compression'] = 1 if options.enable_pointer_compression else 0
+  o['variables']['v8_enable_31bit_smis_on_64bit_arch'] = 1 if options.enable_pointer_compression else 0
   o['variables']['v8_trace_maps'] = 1 if options.trace_maps else 0
   o['variables']['node_use_v8_platform'] = b(not options.without_v8_platform)
   o['variables']['node_use_bundled_v8'] = b(not options.without_bundled_v8)
@@ -1189,14 +1345,6 @@ def configure_v8(o):
     o['variables']['test_isolation_mode'] = 'noop'  # Needed by d8.gyp.
   if options.without_bundled_v8 and options.enable_d8:
     raise Exception('--enable-d8 is incompatible with --without-bundled-v8.')
-  if options.without_bundled_v8 and options.build_v8_with_gn:
-    raise Exception(
-        '--build-v8-with-gn is incompatible with --without-bundled-v8.')
-  if options.build_v8_with_gn:
-    v8_path = os.path.join('deps', 'v8')
-    print('Fetching dependencies to build V8 with GN')
-    options.build_v8_with_gn = FetchDeps(v8_path)
-  o['variables']['build_v8_with_gn'] = b(options.build_v8_with_gn)
 
 
 def configure_openssl(o):
@@ -1218,6 +1366,10 @@ def configure_openssl(o):
       without_ssl_error('--openssl-no-asm')
     if options.openssl_fips:
       without_ssl_error('--openssl-fips')
+    if options.openssl_default_cipher_list:
+      without_ssl_error('--openssl-default-cipher-list')
+    if options.experimental_quic:
+      without_ssl_error('--experimental-quic')
     return
 
   if options.use_openssl_ca_store:
@@ -1227,6 +1379,9 @@ def configure_openssl(o):
   variables['node_without_node_options'] = b(options.without_node_options)
   if options.without_node_options:
       o['defines'] += ['NODE_WITHOUT_NODE_OPTIONS']
+  if options.openssl_default_cipher_list:
+    variables['openssl_default_cipher_list'] = \
+            options.openssl_default_cipher_list
 
   if not options.shared_openssl and not options.openssl_no_asm:
     is_x86 = 'x64' in variables['target_arch'] or 'ia32' in variables['target_arch']
@@ -1372,6 +1527,7 @@ def configure_intl(o):
     locs.add('root')  # must have root
     o['variables']['icu_locales'] = ','.join(str(loc) for loc in locs)
     # We will check a bit later if we can use the canned deps/icu-small
+    o['variables']['icu_default_data'] = options.with_icu_default_data_dir or ''
   elif with_intl == 'full-icu':
     # full ICU
     o['variables']['v8_enable_i18n_support'] = 1
@@ -1525,8 +1681,11 @@ def configure_intl(o):
     os.mkdir(icu_tmp_path)
     icu_data_path = os.path.join(icu_tmp_path, icu_data_file_l)
     with open(icu_data_path, 'wb') as outf:
-        with bz2.BZ2File(compressed_data, 'rb') as inf:
-            shutil.copyfileobj(inf, outf)
+        inf = bz2.BZ2File(compressed_data, 'rb')
+        try:
+          shutil.copyfileobj(inf, outf)
+        finally:
+          inf.close()
     # Now, proceed..
 
   # relative to dep..
@@ -1597,6 +1756,30 @@ def configure_inspector(o):
                        options.without_ssl)
   o['variables']['v8_enable_inspector'] = 0 if disable_inspector else 1
 
+def configure_section_file(o):
+  try:
+    proc = subprocess.Popen(['ld.gold'] + ['-v'], stdin = subprocess.PIPE,
+                            stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+  except OSError:
+    if options.node_section_ordering_info != "":
+      warn('''No acceptable ld.gold linker found!''')
+    return 0
+
+  match = re.match(r"^GNU gold.*([0-9]+)\.([0-9]+)$",
+                   proc.communicate()[0].decode("utf-8"))
+
+  if match:
+    gold_major_version = match.group(1)
+    gold_minor_version = match.group(2)
+    if int(gold_major_version) == 1 and int(gold_minor_version) <= 1:
+      error('''GNU gold version must be greater than 1.2 in order to use section
+            reordering''')
+
+  if options.node_section_ordering_info != "":
+    o['variables']['node_section_ordering_info'] = os.path.realpath(
+      str(options.node_section_ordering_info))
+  else:
+    o['variables']['node_section_ordering_info'] = ""
 
 def make_bin_override():
   if sys.platform == 'win32':
@@ -1654,16 +1837,18 @@ configure_napi(output)
 configure_library('zlib', output)
 configure_library('http_parser', output)
 configure_library('libuv', output)
-configure_library('libcares', output)
-configure_library('nghttp2', output)
-# stay backwards compatible with shared cares builds
-output['variables']['node_shared_cares'] = \
-    output['variables'].pop('node_shared_libcares')
+configure_library('brotli', output, pkgname=['libbrotlidec', 'libbrotlienc'])
+configure_library('cares', output, pkgname='libcares')
+configure_library('nghttp2', output, pkgname='libnghttp2')
 configure_v8(output)
 configure_openssl(output)
 configure_intl(output)
 configure_static(output)
 configure_inspector(output)
+configure_section_file(output)
+
+# Forward OSS-Fuzz settings
+output['variables']['ossfuzz'] = b(options.ossfuzz)
 
 # variables should be a root level element,
 # move everything else to target_defaults
@@ -1718,6 +1903,10 @@ if options.prefix:
 
 if options.use_ninja:
   config['BUILD_WITH'] = 'ninja'
+
+# On Windows there is another find.exe in C:\Windows\System32
+if sys.platform == 'win32':
+  config['FIND'] = '/usr/bin/find'
 
 config_lines = ['='.join((k,v)) for k,v in config.items()]
 # Add a blank string to get a blank line at the end.

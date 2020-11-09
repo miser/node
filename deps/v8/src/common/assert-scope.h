@@ -7,8 +7,11 @@
 
 #include <stdint.h>
 
+#include <memory>
+
 #include "src/base/macros.h"
 #include "src/base/optional.h"
+#include "src/base/platform/mutex.h"
 #include "src/common/globals.h"
 #include "src/utils/pointer-with-payload.h"
 
@@ -28,7 +31,6 @@ enum PerThreadAssertType {
   HEAP_ALLOCATION_ASSERT,
   HANDLE_ALLOCATION_ASSERT,
   HANDLE_DEREFERENCE_ASSERT,
-  DEFERRED_HANDLE_DEREFERENCE_ASSERT,
   CODE_DEPENDENCY_CHANGE_ASSERT,
   LAST_PER_THREAD_ASSERT_TYPE
 };
@@ -145,19 +147,11 @@ using DisallowHandleDereference =
 using AllowHandleDereference =
     PerThreadAssertScopeDebugOnly<HANDLE_DEREFERENCE_ASSERT, true>;
 
-// Scope to document where we do not expect deferred handles to be dereferenced.
-using DisallowDeferredHandleDereference =
-    PerThreadAssertScopeDebugOnly<DEFERRED_HANDLE_DEREFERENCE_ASSERT, false>;
-
-// Scope to introduce an exception to DisallowDeferredHandleDereference.
-using AllowDeferredHandleDereference =
-    PerThreadAssertScopeDebugOnly<DEFERRED_HANDLE_DEREFERENCE_ASSERT, true>;
-
-// Scope to document where we do not expect deferred handles to be dereferenced.
+// Scope to document where we do not expect code dependencies to change.
 using DisallowCodeDependencyChange =
     PerThreadAssertScopeDebugOnly<CODE_DEPENDENCY_CHANGE_ASSERT, false>;
 
-// Scope to introduce an exception to DisallowDeferredHandleDereference.
+// Scope to introduce an exception to DisallowCodeDependencyChange.
 using AllowCodeDependencyChange =
     PerThreadAssertScopeDebugOnly<CODE_DEPENDENCY_CHANGE_ASSERT, true>;
 
@@ -176,6 +170,28 @@ class DisallowHeapAccessIf {
 
  private:
   base::Optional<DisallowHeapAccess> maybe_disallow_;
+};
+
+// Like MutexGuard but also asserts that no heap allocation happens while
+// we're holding the mutex.
+class NoHeapAllocationMutexGuard {
+ public:
+  explicit NoHeapAllocationMutexGuard(base::Mutex* mutex)
+      : guard_(mutex), mutex_(mutex), no_gc_(new DisallowHeapAllocation()) {}
+
+  void Unlock() {
+    mutex_->Unlock();
+    no_gc_.reset();
+  }
+  void Lock() {
+    mutex_->Lock();
+    no_gc_.reset(new DisallowHeapAllocation());
+  }
+
+ private:
+  base::MutexGuard guard_;
+  base::Mutex* mutex_;
+  std::unique_ptr<DisallowHeapAllocation> no_gc_;
 };
 
 // Per-isolate assert scopes.
@@ -243,10 +259,6 @@ extern template class PerThreadAssertScope<HANDLE_ALLOCATION_ASSERT, false>;
 extern template class PerThreadAssertScope<HANDLE_ALLOCATION_ASSERT, true>;
 extern template class PerThreadAssertScope<HANDLE_DEREFERENCE_ASSERT, false>;
 extern template class PerThreadAssertScope<HANDLE_DEREFERENCE_ASSERT, true>;
-extern template class PerThreadAssertScope<DEFERRED_HANDLE_DEREFERENCE_ASSERT,
-                                           false>;
-extern template class PerThreadAssertScope<DEFERRED_HANDLE_DEREFERENCE_ASSERT,
-                                           true>;
 extern template class PerThreadAssertScope<CODE_DEPENDENCY_CHANGE_ASSERT,
                                            false>;
 extern template class PerThreadAssertScope<CODE_DEPENDENCY_CHANGE_ASSERT, true>;

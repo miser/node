@@ -24,11 +24,8 @@ class V8_EXPORT_PRIVATE AccessBuilder final
   // ===========================================================================
   // Access to external values (based on external references).
 
-  // Provides access to a tagged field identified by an external reference.
-  static FieldAccess ForExternalTaggedValue();
-
-  // Provides access to an uint8 field identified by an external reference.
-  static FieldAccess ForExternalUint8Value();
+  // Provides access to an IntPtr field identified by an external reference.
+  static FieldAccess ForExternalIntPtr();
 
   // ===========================================================================
   // Access to heap object fields and elements (based on tagged pointer).
@@ -182,6 +179,15 @@ class V8_EXPORT_PRIVATE AccessBuilder final
   // Provides access to FixedArray::length() field.
   static FieldAccess ForFixedArrayLength();
 
+  // Provides access to WeakFixedArray::length() field.
+  static FieldAccess ForWeakFixedArrayLength();
+
+  // Provides access to SloppyArgumentsElements::context() field.
+  static FieldAccess ForSloppyArgumentsElementsContext();
+
+  // Provides access to SloppyArgumentsElements::arguments() field.
+  static FieldAccess ForSloppyArgumentsElementsArguments();
+
   // Provides access to PropertyArray::length() field.
   static FieldAccess ForPropertyArrayLengthAndHash();
 
@@ -205,6 +211,9 @@ class V8_EXPORT_PRIVATE AccessBuilder final
 
   // Provides access to Map::prototype() field.
   static FieldAccess ForMapPrototype();
+
+  // Provides access to Map::native_context() field.
+  static FieldAccess ForMapNativeContext();
 
   // Provides access to Module::regular_exports() field.
   static FieldAccess ForModuleRegularExports();
@@ -271,17 +280,28 @@ class V8_EXPORT_PRIVATE AccessBuilder final
   static FieldAccess ForFixedArraySlot(
       size_t index, WriteBarrierKind write_barrier_kind = kFullWriteBarrier);
 
+  static FieldAccess ForFeedbackVectorSlot(int index);
+
+  // Provides access to ScopeInfo flags.
+  static FieldAccess ForScopeInfoFlags();
+
   // Provides access to Context slots.
   static FieldAccess ForContextSlot(size_t index);
 
   // Provides access to Context slots that are known to be pointers.
   static FieldAccess ForContextSlotKnownPointer(size_t index);
 
+  // Provides access to WeakFixedArray elements.
+  static ElementAccess ForWeakFixedArrayElement();
+
   // Provides access to FixedArray elements.
   static ElementAccess ForFixedArrayElement();
   static ElementAccess ForFixedArrayElement(
       ElementsKind kind,
       LoadSensitivity load_sensitivity = LoadSensitivity::kUnsafe);
+
+  // Provides access to SloppyArgumentsElements elements.
+  static ElementAccess ForSloppyArgumentsElementsMappedEntry();
 
   // Provides access to stack arguments
   static ElementAccess ForStackArgument();
@@ -317,6 +337,13 @@ class V8_EXPORT_PRIVATE AccessBuilder final
   // Provides access to Dictionary fields.
   static FieldAccess ForDictionaryNextEnumerationIndex();
   static FieldAccess ForDictionaryObjectHashIndex();
+
+  // Provides access to FeedbackCell fields.
+  static FieldAccess ForFeedbackCellValue();
+  static FieldAccess ForFeedbackCellInterruptBudget();
+
+  // Provides access to a FeedbackVector fields.
+  static FieldAccess ForFeedbackVectorClosureFeedbackCellArray();
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(AccessBuilder);

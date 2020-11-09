@@ -13,7 +13,8 @@ const types = {
   PTR: 12,
   MX: 15,
   TXT: 16,
-  ANY: 255
+  ANY: 255,
+  CAA: 257
 };
 
 const classes = {
@@ -36,16 +37,15 @@ function readDomainFromPacket(buffer, offset) {
       nread: 1 + length + nread,
       domain: domain ? `${chunk}.${domain}` : chunk
     };
-  } else {
-    // Pointer to another part of the packet.
-    assert.strictEqual(length & 0xC0, 0xC0);
-    // eslint-disable-next-line space-infix-ops, space-unary-ops
-    const pointeeOffset = buffer.readUInt16BE(offset) &~ 0xC000;
-    return {
-      nread: 2,
-      domain: readDomainFromPacket(buffer, pointeeOffset)
-    };
   }
+  // Pointer to another part of the packet.
+  assert.strictEqual(length & 0xC0, 0xC0);
+  // eslint-disable-next-line space-infix-ops, space-unary-ops
+  const pointeeOffset = buffer.readUInt16BE(offset) &~ 0xC000;
+  return {
+    nread: 2,
+    domain: readDomainFromPacket(buffer, pointeeOffset)
+  };
 }
 
 function parseDNSPacket(buffer) {
@@ -268,6 +268,14 @@ function writeDNSPacket(parsed) {
         buffers.push(new Uint32Array([
           rr.serial, rr.refresh, rr.retry, rr.expire, rr.minttl
         ]));
+        break;
+      }
+      case 'CAA':
+      {
+        rdLengthBuf[0] = 5 + rr.issue.length + 2;
+        buffers.push(Buffer.from([Number(rr.critical)]));
+        buffers.push(Buffer.from([Number(5)]));
+        buffers.push(Buffer.from('issue' + rr.issue));
         break;
       }
       default:

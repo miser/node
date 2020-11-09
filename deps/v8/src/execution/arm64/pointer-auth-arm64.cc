@@ -10,8 +10,8 @@ namespace v8 {
 namespace internal {
 
 // Randomly generated example key for simulating only.
-const Simulator::PACKey Simulator::kPACKeyIA = {0xc31718727de20f71,
-                                                0xab9fd4e14b2fec51, 0};
+const Simulator::PACKey Simulator::kPACKeyIB = {0xeebb163b474e04c8,
+                                                0x5267ac6fc280fb7c, 1};
 
 namespace {
 
@@ -226,7 +226,7 @@ uint64_t Simulator::AuthPAC(uint64_t ptr, uint64_t context, PACKey key,
 
   uint64_t pac = ComputePAC(original_ptr, context, key);
 
-  uint64_t error_code = 1 << key.number;
+  uint64_t error_code = UINT64_C(1) << key.number;
   if ((pac & pac_mask) == (ptr & pac_mask)) {
     return original_ptr;
   } else {

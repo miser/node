@@ -150,9 +150,8 @@ FieldStatsCollector::GetInobjectFieldStats(Map map) {
   JSObjectFieldStats stats;
   stats.embedded_fields_count_ = JSObject::GetEmbedderFieldCount(map);
   if (!map.is_dictionary_map()) {
-    int nof = map.NumberOfOwnDescriptors();
     DescriptorArray descriptors = map.instance_descriptors();
-    for (int descriptor = 0; descriptor < nof; descriptor++) {
+    for (InternalIndex descriptor : map.IterateOwnDescriptors()) {
       PropertyDetails details = descriptors.GetDetails(descriptor);
       if (details.location() == kField) {
         FieldIndex index = FieldIndex::ForDescriptor(map, descriptor);
@@ -427,7 +426,7 @@ class ObjectStatsCollectorImpl {
   bool CanRecordFixedArray(FixedArrayBase array);
   bool IsCowArray(FixedArrayBase array);
 
-  // Blacklist for objects that should not be recorded using
+  // Blocklist for objects that should not be recorded using
   // VirtualObjectStats and RecordSimpleVirtualObjectStats. For recording those
   // objects dispatch to the low level ObjectStats::RecordObjectStats manually.
   bool ShouldRecordObject(HeapObject object, CowMode check_cow_array);
@@ -658,8 +657,7 @@ static ObjectStats::VirtualInstanceType GetFeedbackSlotType(
   Object obj = maybe_obj->GetHeapObjectOrSmi();
   switch (kind) {
     case FeedbackSlotKind::kCall:
-      if (obj == *isolate->factory()->uninitialized_symbol() ||
-          obj == *isolate->factory()->premonomorphic_symbol()) {
+      if (obj == *isolate->factory()->uninitialized_symbol()) {
         return ObjectStats::FEEDBACK_VECTOR_SLOT_CALL_UNUSED_TYPE;
       }
       return ObjectStats::FEEDBACK_VECTOR_SLOT_CALL_TYPE;
@@ -669,8 +667,7 @@ static ObjectStats::VirtualInstanceType GetFeedbackSlotType(
     case FeedbackSlotKind::kLoadGlobalNotInsideTypeof:
     case FeedbackSlotKind::kLoadKeyed:
     case FeedbackSlotKind::kHasKeyed:
-      if (obj == *isolate->factory()->uninitialized_symbol() ||
-          obj == *isolate->factory()->premonomorphic_symbol()) {
+      if (obj == *isolate->factory()->uninitialized_symbol()) {
         return ObjectStats::FEEDBACK_VECTOR_SLOT_LOAD_UNUSED_TYPE;
       }
       return ObjectStats::FEEDBACK_VECTOR_SLOT_LOAD_TYPE;
@@ -682,8 +679,7 @@ static ObjectStats::VirtualInstanceType GetFeedbackSlotType(
     case FeedbackSlotKind::kStoreGlobalStrict:
     case FeedbackSlotKind::kStoreKeyedSloppy:
     case FeedbackSlotKind::kStoreKeyedStrict:
-      if (obj == *isolate->factory()->uninitialized_symbol() ||
-          obj == *isolate->factory()->premonomorphic_symbol()) {
+      if (obj == *isolate->factory()->uninitialized_symbol()) {
         return ObjectStats::FEEDBACK_VECTOR_SLOT_STORE_UNUSED_TYPE;
       }
       return ObjectStats::FEEDBACK_VECTOR_SLOT_STORE_TYPE;
@@ -825,14 +821,8 @@ void ObjectStatsCollectorImpl::CollectGlobalStatistics() {
                                  ObjectStats::STRING_SPLIT_CACHE_TYPE);
   RecordSimpleVirtualObjectStats(HeapObject(), heap_->regexp_multiple_cache(),
                                  ObjectStats::REGEXP_MULTIPLE_CACHE_TYPE);
-  RecordSimpleVirtualObjectStats(HeapObject(), heap_->retained_maps(),
-                                 ObjectStats::RETAINED_MAPS_TYPE);
 
   // WeakArrayList.
-  RecordSimpleVirtualObjectStats(
-      HeapObject(),
-      WeakArrayList::cast(heap_->noscript_shared_function_infos()),
-      ObjectStats::NOSCRIPT_SHARED_FUNCTION_INFOS_TYPE);
   RecordSimpleVirtualObjectStats(HeapObject(),
                                  WeakArrayList::cast(heap_->script_list()),
                                  ObjectStats::SCRIPT_LIST_TYPE);
@@ -849,7 +839,6 @@ void ObjectStatsCollectorImpl::RecordObjectStats(HeapObject obj,
 bool ObjectStatsCollectorImpl::CanRecordFixedArray(FixedArrayBase array) {
   ReadOnlyRoots roots(heap_);
   return array != roots.empty_fixed_array() &&
-         array != roots.empty_sloppy_arguments_elements() &&
          array != roots.empty_slow_element_dictionary() &&
          array != roots.empty_property_dictionary();
 }
@@ -1031,16 +1020,13 @@ void ObjectStatsCollectorImpl::RecordVirtualBytecodeArrayDetails(
 
 namespace {
 
-ObjectStats::VirtualInstanceType CodeKindToVirtualInstanceType(
-    Code::Kind kind) {
+ObjectStats::VirtualInstanceType CodeKindToVirtualInstanceType(CodeKind kind) {
   switch (kind) {
 #define CODE_KIND_CASE(type) \
-  case Code::type:           \
+  case CodeKind::type:       \
     return ObjectStats::type;
     CODE_KIND_LIST(CODE_KIND_CASE)
 #undef CODE_KIND_CASE
-    default:
-      UNREACHABLE();
   }
   UNREACHABLE();
 }
@@ -1055,18 +1041,12 @@ void ObjectStatsCollectorImpl::RecordVirtualCodeDetails(Code code) {
   RecordSimpleVirtualObjectStats(code, code.relocation_info(),
                                  ObjectStats::RELOC_INFO_TYPE);
   Object source_position_table = code.source_position_table();
-  if (source_position_table.IsSourcePositionTableWithFrameCache()) {
-    RecordSimpleVirtualObjectStats(
-        code,
-        SourcePositionTableWithFrameCache::cast(source_position_table)
-            .source_position_table(),
-        ObjectStats::SOURCE_POSITION_TABLE_TYPE);
-  } else if (source_position_table.IsHeapObject()) {
+  if (source_position_table.IsHeapObject()) {
     RecordSimpleVirtualObjectStats(code,
                                    HeapObject::cast(source_position_table),
                                    ObjectStats::SOURCE_POSITION_TABLE_TYPE);
   }
-  if (code.kind() == Code::Kind::OPTIMIZED_FUNCTION) {
+  if (CodeKindIsOptimizedJSFunction(code.kind())) {
     DeoptimizationData input_data =
         DeoptimizationData::cast(code.deoptimization_data());
     if (input_data.length() > 0) {
@@ -1089,6 +1069,9 @@ void ObjectStatsCollectorImpl::RecordVirtualCodeDetails(Code code) {
 void ObjectStatsCollectorImpl::RecordVirtualContext(Context context) {
   if (context.IsNativeContext()) {
     RecordObjectStats(context, NATIVE_CONTEXT_TYPE, context.Size());
+    RecordSimpleVirtualObjectStats(context, context.retained_maps(),
+                                   ObjectStats::RETAINED_MAPS_TYPE);
+
   } else if (context.IsFunctionContext()) {
     RecordObjectStats(context, FUNCTION_CONTEXT_TYPE, context.Size());
   } else {

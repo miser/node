@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/init/v8.h"
+#include "test/common/wasm/wasm-interpreter.h"
+#include "test/common/wasm/wasm-macro-gen.h"
 #include "test/unittests/test-utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
-
-#include "src/init/v8.h"
-#include "src/wasm/wasm-interpreter.h"
-
-#include "test/common/wasm/wasm-macro-gen.h"
 
 using testing::MakeMatcher;
 using testing::Matcher;
@@ -87,8 +85,7 @@ class ControlTransferTest : public TestWithZone {
   }
 
   void CheckNoOtherTargets(
-      const byte* start, const byte* end,
-      ControlTransferMap& map,  // NOLINT(runtime/references)
+      const byte* start, const byte* end, const ControlTransferMap& map,
       std::initializer_list<ExpectedControlTransfer> targets) {
     // Check there are no other control targets.
     for (pc_t pc = 0; start + pc < end; pc++) {
